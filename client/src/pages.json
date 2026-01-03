@@ -1,0 +1,31 @@
+{
+    "pages": [
+        {
+            "path": "pages/login/login",
+            "style": {
+                "navigationBarTitleText": "SecChat",
+                "navigationStyle": "custom",
+                "navigationBarTextStyle": "white"
+            }
+        },
+        {
+            "path": "pages/chat/chat",
+            "style": {
+                "navigationBarTitleText": "群聊",
+                "navigationStyle": "custom"
+            }
+        },
+        {
+            "path": "pages/members/members",
+            "style": {
+                "navigationBarTitleText": "群成员"
+            }
+        }
+    ],
+    "globalStyle": {
+        "navigationBarTextStyle": "black",
+        "navigationBarTitleText": "SecChat",
+        "navigationBarBackgroundColor": "#ffffff",
+        "backgroundColor": "#f5f5f5"
+    }
+}
