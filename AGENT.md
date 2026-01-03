@@ -47,22 +47,24 @@ sec-chat/
 
 ## 快速开始
 
-### 1. 启动服务器
+### 一键启动 (推荐)
 ```bash
-cd server
-go build -o secchat-server .
-./secchat-server -password YOUR_PASSWORD -port 8080
+make install      # 首次运行，安装依赖
+make              # 启动前后端
+# 或指定密码: make PASSWORD=mypassword
 ```
 
-### 2. 启动H5客户端
+### 分别启动
 ```bash
-cd client
-npm install --legacy-peer-deps
-npm run dev:h5
+# 启动服务器
+make server PASSWORD=YOUR_PASSWORD
+
+# 启动客户端
+make client
 # 访问 http://localhost:5173
 ```
 
-### 3. 连接测试
+### 连接测试
 - 服务器地址: `ws://localhost:8080/ws`
 - 密码: 启动服务器时设置的密码
 
