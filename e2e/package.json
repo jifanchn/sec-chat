@@ -1,0 +1,23 @@
+{
+  "name": "secchat-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "jest --runInBand --forceExit",
+    "test:headless": "HEADLESS=true jest --runInBand --forceExit",
+    "test:debug": "DEBUG=true jest --runInBand --forceExit"
+  },
+  "dependencies": {
+    "puppeteer": "^22.0.0",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testTimeout": 60000,
+    "verbose": true,
+    "testMatch": ["**/*.test.js"]
+  }
+}

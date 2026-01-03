@@ -35,3 +35,7 @@ client/screenshots/
 client/full_e2e_test.js
 client/bot_test.js
 client/seed_messages.js
+
+# E2E tests
+e2e/node_modules/
+e2e/screenshots/

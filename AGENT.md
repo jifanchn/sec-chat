@@ -99,3 +99,20 @@ go test ./... -v
 | 构建产物 | `dist/`, `*.local` |
 | 服务器 | `server/secchat-server`, `server/server.log`, `server/data/` |
 | 测试文件 | `client/screenshots/`, `client/*_test.js`, `client/seed_messages.js` |
+
+## E2E 测试
+
+### 运行测试
+```bash
+make e2e           # 自动启动服务并运行测试
+make e2e-install   # 仅安装测试依赖
+```
+
+### 测试套件
+| 文件 | 测试内容 |
+|------|----------|
+| `01_login.test.js` | 登录流程、凭证验证、缓存 |
+| `02_messaging.test.js` | 发送消息、Emoji、长消息 |
+| `03_reply_recall.test.js` | 回复、撤回消息 |
+| `04_multi_user.test.js` | 多用户聊天、输入状态 |
+| `05_history.test.js` | 历史加载、分页 |
