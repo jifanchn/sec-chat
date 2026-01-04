@@ -1,0 +1,44 @@
+# Git
+.git
+.gitignore
+
+# Node.js
+node_modules
+npm-debug.log
+client/node_modules
+client/dist
+client/unpackage
+e2e/node_modules
+
+# Go
+server/data/
+server/secchat-server
+server/*.log
+*.exe
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Documentation
+AGENT.md
+README.md
+*.md
+
+# Test files
+e2e/
+*_test.go
+*.test.js
+test_*.js
+
+# OS
+Thumbs.db

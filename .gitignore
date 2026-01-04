@@ -25,6 +25,7 @@ dist/
 server/secchat-server
 server/server.log
 server/data/
+server/data_test/
 
 # Client specific
 client/dist/
@@ -39,3 +40,29 @@ client/seed_messages.js
 # E2E tests
 e2e/node_modules/
 e2e/screenshots/
+
+# Deploy files (contain sensitive information)
+secchat.tar.gz
+*.tar.gz
+deploy.sh
+.env
+.env.local
+*.env
+*.key
+*.pem
+*.crt
+
+# Server-specific files
+ssh_key*
+deploy-server.sh
+服务器部署说明.md
+DEPLOY.md.backup
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.backup
+*.bak
+*.swp

@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 )
 
 // Config holds the server configuration
@@ -20,18 +21,40 @@ type Config struct {
 
 var cfg *Config
 
-// Init initializes configuration from command line arguments
+// Init initializes configuration from command line arguments and environment variables
 func Init() *Config {
 	cfg = &Config{}
 
-	flag.IntVar(&cfg.Port, "port", 8080, "Server port")
-	flag.StringVar(&cfg.Password, "password", "", "Chat room password (required)")
-	flag.StringVar(&cfg.DBPath, "db", "./data/chat.db", "Database file path")
-	flag.StringVar(&cfg.UploadDir, "uploads", "./data/uploads", "Upload directory")
+	// Set defaults
+	cfg.Port = 8080
+	cfg.DBPath = "./data/chat.db"
+	cfg.UploadDir = "./data/uploads"
+
+	// Read from environment variables first
+	if portStr := os.Getenv("PORT"); portStr != "" {
+		if port, err := strconv.Atoi(portStr); err == nil {
+			cfg.Port = port
+		}
+	}
+	if password := os.Getenv("PASSWORD"); password != "" {
+		cfg.Password = password
+	}
+	if dbPath := os.Getenv("DB_PATH"); dbPath != "" {
+		cfg.DBPath = dbPath
+	}
+	if uploadDir := os.Getenv("UPLOAD_DIR"); uploadDir != "" {
+		cfg.UploadDir = uploadDir
+	}
+
+	// Command line arguments override environment variables
+	flag.IntVar(&cfg.Port, "port", cfg.Port, "Server port")
+	flag.StringVar(&cfg.Password, "password", cfg.Password, "Chat room password (required)")
+	flag.StringVar(&cfg.DBPath, "db", cfg.DBPath, "Database file path")
+	flag.StringVar(&cfg.UploadDir, "uploads", cfg.UploadDir, "Upload directory")
 	flag.Parse()
 
 	if cfg.Password == "" {
-		log.Fatal("Password is required. Use -password flag")
+		log.Fatal("Password is required. Use -password flag or PASSWORD environment variable")
 	}
 
 	// Generate password hash for verification

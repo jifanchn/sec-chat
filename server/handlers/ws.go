@@ -6,10 +6,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"sec-chat/server/config"
 	"sec-chat/server/models"
 	"sec-chat/server/store"
+
+	"github.com/gorilla/websocket"
 )
 
 // Client represents a connected WebSocket client
@@ -69,6 +70,13 @@ func (h *Hub) run() {
 					// Notify others about user leaving
 					msg := models.SystemMessage(client.user.Name + " left the chat")
 					h.broadcastMessage(msg)
+					// Broadcast updated users list
+					usersMsg := map[string]interface{}{
+						"type":  "users",
+						"users": h.getOnlineUsersUnlocked(),
+					}
+					data, _ := json.Marshal(usersMsg)
+					h.broadcast <- data
 				}
 				close(client.send)
 			}
@@ -105,9 +113,14 @@ func (h *Hub) broadcastMessage(msg *models.Message) {
 func (h *Hub) GetOnlineUsers() []*models.User {
 	h.mutex.RLock()
 	defer h.mutex.RUnlock()
+	return h.getOnlineUsersUnlocked()
+}
 
+// getOnlineUsersUnlocked returns list of online users without locking (caller must hold lock)
+func (h *Hub) getOnlineUsersUnlocked() []*models.User {
 	var users []*models.User
-	for client := range h.clients {
+	// Use users map to avoid duplicates (same user with multiple connections)
+	for _, client := range h.users {
 		if client.verified && client.user != nil {
 			client.user.Online = true
 			users = append(users, client.user)
@@ -275,11 +288,13 @@ func (c *Client) handleAuth(msg WSMessage) {
 	store.Get().SaveMessage(sysMsg)
 	c.hub.broadcastMessage(sysMsg)
 
-	// Send online users
-	c.sendJSON(map[string]interface{}{
+	// Broadcast online users to all clients
+	usersMsg := map[string]interface{}{
 		"type":  "users",
 		"users": c.hub.GetOnlineUsers(),
-	})
+	}
+	data, _ := json.Marshal(usersMsg)
+	c.hub.broadcast <- data
 }
 
 // handleChatMessage handles text and image messages

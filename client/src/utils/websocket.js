@@ -7,8 +7,8 @@ class SecWebSocket {
         this.socket = null;
         this.serverUrl = '';
         this.reconnectAttempts = 0;
-        this.maxReconnectAttempts = 5;
-        this.reconnectDelay = 3000;
+        this.maxReconnectDelay = 10000;
+        this.baseReconnectDelay = 3000;
         this.listeners = {};
         this.connected = false;
         this.authenticated = false;
@@ -17,39 +17,97 @@ class SecWebSocket {
     connect(serverUrl) {
         return new Promise((resolve, reject) => {
             this.serverUrl = serverUrl;
-            
-            try {
-                this.socket = uni.connectSocket({
-                    url: serverUrl,
-                    success: () => console.log('WebSocket connecting...'),
-                    fail: (err) => {
-                        console.error('WebSocket connect failed:', err);
-                        reject(new Error('连接失败'));
-                    }
-                });
 
-                uni.onSocketOpen(() => {
-                    this.connected = true;
-                    this.reconnectAttempts = 0;
-                    this.emit('connected');
-                    resolve();
-                });
+            // Set timeout to avoid hanging forever
+            const timeout = setTimeout(() => {
+                reject(new Error('连接超时'));
+            }, 10000);
 
-                uni.onSocketMessage((res) => this.handleMessage(res.data));
+            // Detect if running in H5 environment
+            const isH5 = typeof window !== 'undefined' && typeof document !== 'undefined';
 
-                uni.onSocketClose((res) => {
-                    this.connected = false;
-                    this.authenticated = false;
-                    this.emit('disconnected', res);
-                    if (this.reconnectAttempts < this.maxReconnectAttempts) this.scheduleReconnect();
-                });
+            if (isH5) {
+                // H5: Use native WebSocket for better compatibility
+                console.log('[WebSocket] Using native WebSocket for H5');
+                try {
+                    const ws = new WebSocket(serverUrl);
+                    this.socket = ws;
 
-                uni.onSocketError((err) => {
-                    this.emit('error', err);
-                    reject(new Error('连接错误'));
-                });
-            } catch (error) {
-                reject(error);
+                    ws.onopen = () => {
+                        clearTimeout(timeout);
+                        this.connected = true;
+                        this.reconnectAttempts = 0;
+                        this.emit('connected');
+                        console.log('[WebSocket] Connected');
+                        resolve();
+                    };
+
+                    ws.onerror = (err) => {
+                        clearTimeout(timeout);
+                        console.error('[WebSocket] Error:', err);
+                        this.emit('error', err);
+                        reject(new Error('连接错误'));
+                    };
+
+                    ws.onmessage = (event) => {
+                        this.handleMessage(event.data);
+                    };
+
+                    ws.onclose = () => {
+                        this.connected = false;
+                        this.authenticated = false;
+                        this.emit('disconnected');
+                        this.scheduleReconnect();
+                    };
+                } catch (error) {
+                    clearTimeout(timeout);
+                    reject(error);
+                }
+            } else {
+                // App/MiniProgram: Use uni.connectSocket
+                try {
+                    this.socket = uni.connectSocket({
+                        url: serverUrl,
+                        success: () => console.log('WebSocket connecting...'),
+                        fail: (err) => {
+                            clearTimeout(timeout);
+                            console.error('WebSocket connect failed:', err);
+                            reject(new Error('连接失败'));
+                        }
+                    });
+
+                    const onOpen = () => {
+                        clearTimeout(timeout);
+                        this.connected = true;
+                        this.reconnectAttempts = 0;
+                        this.emit('connected');
+                        uni.offSocketOpen(onOpen);
+                        uni.offSocketError(onError);
+                        resolve();
+                    };
+
+                    const onError = (err) => {
+                        clearTimeout(timeout);
+                        console.error('WebSocket error:', err);
+                        uni.offSocketOpen(onOpen);
+                        uni.offSocketError(onError);
+                        this.emit('error', err);
+                        reject(new Error('连接错误'));
+                    };
+
+                    uni.onSocketOpen(onOpen);
+                    uni.onSocketError(onError);
+                    uni.onSocketMessage((res) => this.handleMessage(res.data));
+                    uni.onSocketClose((res) => {
+                        this.connected = false;
+                        this.authenticated = false;
+                        this.emit('disconnected', res);
+                        this.scheduleReconnect();
+                    });
+                } catch (error) {
+                    clearTimeout(timeout);
+                    reject(error);
+                }
             }
         });
     }
@@ -70,10 +128,17 @@ class SecWebSocket {
     }
 
     send(data) {
-        if (this.connected) {
-            uni.sendSocketMessage({
-                data: typeof data === 'string' ? data : JSON.stringify(data)
-            });
+        if (!this.connected) return;
+
+        const isH5 = typeof window !== 'undefined' && typeof document !== 'undefined';
+        const message = typeof data === 'string' ? data : JSON.stringify(data);
+
+        if (isH5 && this.socket instanceof WebSocket) {
+            // H5: Use native WebSocket
+            this.socket.send(message);
+        } else {
+            // App/MiniProgram: Use uni.sendSocketMessage
+            uni.sendSocketMessage({ data: message });
         }
     }
 
@@ -89,18 +154,29 @@ class SecWebSocket {
 
     scheduleReconnect() {
         this.reconnectAttempts++;
-        const delay = this.reconnectDelay * this.reconnectAttempts;
+        const delay = Math.min(this.baseReconnectDelay * this.reconnectAttempts, this.maxReconnectDelay);
         this.emit('reconnecting', { attempt: this.reconnectAttempts, delay });
         setTimeout(() => {
-            this.connect(this.serverUrl).catch(() => {
-                if (this.reconnectAttempts < this.maxReconnectAttempts) this.scheduleReconnect();
-                else this.emit('reconnect_failed');
-            });
+            this.connect(this.serverUrl).catch(() => this.scheduleReconnect());
         }, delay);
     }
 
     disconnect() {
-        if (this.socket) { uni.closeSocket(); this.socket = null; }
+        const isH5 = typeof window !== 'undefined' && typeof document !== 'undefined';
+
+        if (isH5 && this.socket instanceof WebSocket) {
+            // H5: Use native WebSocket close
+            if (this.socket) {
+                this.socket.close();
+                this.socket = null;
+            }
+        } else {
+            // App/MiniProgram: Use uni.closeSocket
+            if (this.socket) {
+                uni.closeSocket();
+                this.socket = null;
+            }
+        }
     }
 
     on(event, callback) {

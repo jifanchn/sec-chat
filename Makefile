@@ -56,19 +56,20 @@ test:
 e2e-install:
 	cd e2e && npm install
 
-# Run E2E tests (starts server & client automatically)
+# Run E2E tests (starts server & client automatically on test ports)
 e2e: build e2e-install
 	@echo "Starting E2E tests..."
-	@rm -rf server/data/  # Clean state
-	@cd server && ./secchat-server -password test123 -port 8080 & echo $$! > /tmp/secchat-server.pid
-	@sleep 2
-	@cd client && npm run dev:h5 & echo $$! > /tmp/secchat-client.pid
+	@rm -rf server/data_test/
+	@cd server && ./secchat-server -password test123 -port 8081 -db data_test/chat.db > test_server.log 2>&1 & echo $$! > /tmp/secchat-server-test.pid
 	@sleep 5
-	@cd e2e && npm test || true
-	@kill `cat /tmp/secchat-server.pid` 2>/dev/null || true
-	@kill `cat /tmp/secchat-client.pid` 2>/dev/null || true
+	@cd client && npm run dev:h5 -- --port 5174 & echo $$! > /tmp/secchat-client-test.pid
+	@sleep 10
+	@cd e2e && BASE_URL=http://localhost:5174 WS_URL=ws://localhost:8081/ws npm test || true
+	@kill `cat /tmp/secchat-server-test.pid` 2>/dev/null || true
+	@kill `cat /tmp/secchat-client-test.pid` 2>/dev/null || true
 	@pkill -f "secchat-server" 2>/dev/null || true
 	@pkill -f "vite" 2>/dev/null || true
+	@rm -rf server/data_test/
 	@echo "E2E tests completed"
 
 # Help
@@ -88,3 +89,70 @@ help:
 	@echo "  PASSWORD=xxx  - Server password (default: secret123)"
 	@echo "  PORT=xxxx     - Server port (default: 8080)"
 
+
+# Docker commands
+docker-build:
+	@echo "Building Docker image..."
+	@docker build -t secchat:latest .
+
+docker-run: docker-build
+	@echo "Running Docker container..."
+	@docker run -d \
+		--name secchat \
+		-p 8080:8080 \
+		-e PASSWORD=$(PASSWORD) \
+		-v secchat_data:/app/data \
+		--restart unless-stopped \
+		secchat:latest
+
+docker-stop:
+	@echo "Stopping Docker container..."
+	@docker stop secchat || true
+	@docker rm secchat || true
+
+docker-logs:
+	@docker logs -f secchat
+
+docker-compose-up:
+	@echo "Starting with docker-compose..."
+	@docker-compose up -d
+
+docker-compose-down:
+	@echo "Stopping with docker-compose..."
+	@docker-compose down
+
+docker-compose-logs:
+	@docker-compose logs -f
+
+# Docker commands
+docker-build:
+	echo "Building Docker image..."
+	docker build -t secchat:latest .
+
+docker-run: docker-build
+	echo "Running Docker container..."
+	docker run -d \\
+		--name secchat \\
+		-p 8080:8080 \\
+		-e PASSWORD=$(PASSWORD) \\
+		-v secchat_data:/app/data \\
+		--restart unless-stopped \\
+		secchat:latest
+
+docker-stop:
+	docker stop secchat || true
+	docker rm secchat || true
+
+docker-logs:
+	docker logs -f secchat
+
+docker-compose-up:
+	echo "Starting with docker-compose..."
+	docker-compose up -d
+
+docker-compose-down:
+	echo "Stopping with docker-compose..."
+	docker-compose down
+
+docker-compose-logs:
+	docker-compose logs -f

@@ -148,7 +148,8 @@ export default {
             this.errorMsg = '';
             
             try {
-                const userId = SecCrypto.generateUserId();
+                // Use deterministic ID based on nickname so that message history is preserved across logins
+                const userId = await SecCrypto.generateDeterministicId(this.nickname.trim());
                 const encryptionKey = await SecCrypto.deriveKey(this.password);
                 const passwordHash = await SecCrypto.hashPassword(this.password);
                 

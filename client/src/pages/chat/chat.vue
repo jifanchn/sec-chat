@@ -7,6 +7,7 @@
             </view>
             <view class="header-right">
                 <view class="icon-btn" @click="goToMembers">👥</view>
+                <view class="icon-btn" @click="handleLogout" style="margin-left: 10rpx;">🚪</view>
             </view>
         </view>
         
@@ -17,14 +18,14 @@
                 </view>
                 <view v-for="(msg, index) in messages" :key="msg.id" :id="'msg-' + msg.id">
                     <view v-if="shouldShowTime(index)" class="time-divider">
-                        <text>{{ formatDate(msg.timestamp) }}</text>
+                        <text style="color: #666;">{{ formatDate(msg.timestamp) }}</text>
                     </view>
                     
                     <view v-if="msg.type === 'system'" class="system-message">
                         <text>{{ msg.content }}</text>
                     </view>
                     
-                    <view v-else class="message" :class="{ self: msg.from === userId }" @longpress="showContextMenu($event, msg)">
+                    <view v-else class="message" :class="{ self: isMessageSelf(msg) }" @longpress="showContextMenu($event, msg)">
                         <view class="message-avatar"><text>{{ getAvatarChar(msg.fromName) }}</text></view>
                         <view class="message-content">
                             <view class="message-header">
@@ -66,7 +67,7 @@
                 <view class="tool-btn" @click="chooseImage">📷</view>
             </view>
             <view class="input-wrapper">
-                <textarea class="message-input" v-model="inputText" placeholder="输入消息..." :auto-height="true" @confirm="sendMessage"/>
+                <textarea class="message-input" v-model="inputText" placeholder="输入消息..." :auto-height="true" @confirm="sendMessage" @keydown.enter.exact.prevent="sendMessage"/>
                 <view class="send-btn" :class="{ active: inputText.trim() }" @click="sendMessage">发送</view>
             </view>
         </view>
@@ -121,6 +122,7 @@ export default {
         SecWebSocket.on('disconnected', this.onDisconnected);
         
         this.loadHistory();
+        this.loadMembers();  // Load members on init
     },
     methods: {
         async loadHistory() {
@@ -129,20 +131,25 @@ export default {
             try {
                 const app = getApp();
                 const httpUrl = app.globalData.serverUrl.replace('ws://', 'http://').replace('wss://', 'https://').replace('/ws', '');
-                const [err, res] = await uni.request({ url: `${httpUrl}/api/messages?limit=50`, method: 'GET' });
+                const response = await uni.request({ url: `${httpUrl}/api/messages?limit=50`, method: 'GET' });
+                let err = null, res = null;
+                if (Array.isArray(response)) { [err, res] = response; }
+                else { res = response; }
+
                 if (!err && res.data?.messages) {
                     const newMessages = res.data.messages;
                     for (const msg of newMessages) {
-                        if (msg.content && msg.type !== 'system') {
-                            try { msg.decryptedContent = await SecCrypto.decrypt(msg.content, this.encryptionKey); }
-                            catch (e) { msg.decryptedContent = msg.content; }
-                        } else { msg.decryptedContent = msg.content; }
+                        await this.decryptMessage(msg);
                     }
                     this.messages = newMessages;
                     this.hasMore = res.data.hasMore;
                     this.$nextTick(() => this.scrollToBottom());
+                } else {
+                    console.error('Load history response error:', err, res);
                 }
-            } catch (error) { console.error('Load history failed:', error); }
+            } catch (error) { 
+                console.error('Load history exception:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
+            }
             finally { this.isLoading = false; }
         },
         async loadMore() {
@@ -152,14 +159,15 @@ export default {
                 const app = getApp();
                 const firstMsg = this.messages[0];
                 const httpUrl = app.globalData.serverUrl.replace('ws://', 'http://').replace('wss://', 'https://').replace('/ws', '');
-                const [err, res] = await uni.request({ url: `${httpUrl}/api/messages?limit=50&before=${firstMsg.timestamp}`, method: 'GET' });
+                const response = await uni.request({ url: `${httpUrl}/api/messages?limit=50&before=${firstMsg.timestamp}`, method: 'GET' });
+                let err = null, res = null;
+                if (Array.isArray(response)) { [err, res] = response; }
+                else { res = response; }
+
                 if (!err && res.data?.messages) {
                     const olderMessages = res.data.messages;
                     for (const msg of olderMessages) {
-                        if (msg.content && msg.type !== 'system') {
-                            try { msg.decryptedContent = await SecCrypto.decrypt(msg.content, this.encryptionKey); }
-                            catch (e) { msg.decryptedContent = msg.content; }
-                        } else { msg.decryptedContent = msg.content; }
+                        await this.decryptMessage(msg);
                     }
                     if (olderMessages.length > 0) {
                         this.messages = [...olderMessages, ...this.messages];
@@ -170,14 +178,82 @@ export default {
             } catch (error) { console.error('Load more failed:', error); }
             finally { this.isLoading = false; }
         },
+        async loadMembers() {
+            try {
+                const app = getApp();
+                const httpUrl = app.globalData.serverUrl.replace('ws://', 'http://').replace('wss://', 'https://').replace('/ws', '');
+                const response = await uni.request({ url: `${httpUrl}/api/members`, method: 'GET' });
+                let err = null, res = null;
+                if (Array.isArray(response)) { [err, res] = response; }
+                else { res = response; }
+
+                if (!err && res.data?.members) {
+                    const list = res.data.members;
+                    if (!list.find(m => m.id === this.userId)) {
+                        list.push({ id: this.userId, name: this.userName, online: true });
+                    }
+                    this.members = list;
+                    console.log('[MEMBERS] Loaded:', this.members.length, 'online:', this.onlineCount);
+                }
+            } catch (error) { console.error('Load members failed:', error); }
+        },
         async onMessage(data) {
+            console.log('[RECV] onMessage called, type:', data.type, 'from:', data.fromName, 'content preview:', data.content?.substring(0, 50));
             if (data.content && data.type !== 'system') {
-                try { data.decryptedContent = await SecCrypto.decrypt(data.content, this.encryptionKey); }
-                catch (e) { data.decryptedContent = data.content; }
+                try { 
+                    if (data.type === 'image') {
+                        // For images, content is a URL to encrypted file
+                        // Download and decrypt it
+                        data.decryptedContent = await this.downloadAndDecryptImage(data.content);
+                        console.log('[RECV] Image decrypted successfully');
+                    } else {
+                        // For text, content is encrypted string
+                        data.decryptedContent = await SecCrypto.decrypt(data.content, this.encryptionKey);
+                        console.log('[RECV] Text decrypted:', data.decryptedContent);
+                    }
+                }
+                catch (e) { 
+                    console.error('Decryption failed for message:', data.id, e);
+                    data.decryptedContent = data.type === 'image' ? '' : data.content; 
+                }
             }
             this.messages.push(data);
+            console.log('[RECV] Total messages now:', this.messages.length);
             this.$nextTick(() => this.scrollToBottom());
             if (data.from !== this.userId) SecWebSocket.sendRead(data.id);
+        },
+        async downloadAndDecryptImage(url) {
+            // Download encrypted image from server
+            const response = await fetch(url);
+            if (!response.ok) throw new Error('Failed to download image');
+            
+            const encryptedData = await response.arrayBuffer();
+            
+            // Decrypt the binary data
+            const decryptedData = SecCrypto.decryptBinary(encryptedData, this.encryptionKey);
+            
+            // Convert to blob URL for display
+            const blob = new Blob([decryptedData], { type: 'image/jpeg' });
+            return URL.createObjectURL(blob);
+        },
+        async decryptMessage(msg) {
+            // Helper to decrypt a message (text or image)
+            if (!msg.content || msg.type === 'system') {
+                msg.decryptedContent = msg.content;
+                return;
+            }
+            try {
+                if (msg.type === 'image') {
+                    // Image content is a URL to encrypted file
+                    msg.decryptedContent = await this.downloadAndDecryptImage(msg.content);
+                } else {
+                    // Text content is encrypted string
+                    msg.decryptedContent = await SecCrypto.decrypt(msg.content, this.encryptionKey);
+                }
+            } catch (e) {
+                console.error('Decrypt failed for msg:', msg.id, e);
+                msg.decryptedContent = msg.type === 'image' ? '' : msg.content;
+            }
         },
         onSystemMessage(data) {
             this.messages.push({ ...data, decryptedContent: data.content });
@@ -194,7 +270,15 @@ export default {
             const msg = this.messages.find(m => m.id === data.id);
             if (msg) msg.recalled = true;
         },
-        onUsers(data) { if (data.users) this.members = data.users; },
+        onUsers(data) { 
+            if (data.users) {
+                const list = data.users;
+                if (!list.find(m => m.id === this.userId)) {
+                    list.push({ id: this.userId, name: this.userName, online: true });
+                }
+                this.members = list;
+            }
+        },
         onDisconnected() { uni.showToast({ title: '连接已断开', icon: 'none' }); },
         async sendMessage() {
             const content = this.inputText.trim();
@@ -203,24 +287,157 @@ export default {
                 const encrypted = await SecCrypto.encrypt(content, this.encryptionKey);
                 const options = {};
                 if (this.replyingTo) options.replyTo = this.replyingTo.id;
+                console.log('[SEND] Sending message:', content);
                 SecWebSocket.sendMessage('text', encrypted, options);
                 this.inputText = '';
                 this.cancelReply();
-            } catch (error) { uni.showToast({ title: '发送失败', icon: 'none' }); }
+            } catch (error) { 
+                console.error('[SEND] Send failed:', error);
+                uni.showToast({ title: '发送失败', icon: 'none' }); 
+            }
         },
         async chooseImage() {
-            const [err, res] = await uni.chooseImage({ count: 1, sizeType: ['compressed'] });
-            if (!err && res.tempFilePaths?.length > 0) {
-                const fs = uni.getFileSystemManager();
-                fs.readFile({
-                    filePath: res.tempFilePaths[0], encoding: 'base64',
-                    success: async (fileRes) => {
-                        const base64 = 'data:image/jpeg;base64,' + fileRes.data;
-                        const encrypted = await SecCrypto.encrypt(base64, this.encryptionKey);
-                        SecWebSocket.sendMessage('image', encrypted);
-                    }
-                });
+            console.log('[IMAGE] Starting chooseImage...');
+            const isH5 = typeof window !== 'undefined' && typeof document !== 'undefined';
+
+            if (isH5) {
+                // H5: Use native file input for better compatibility with Puppeteer
+                this.createAndTriggerFileInput();
+            } else {
+                // App/MiniProgram: Use uni.chooseImage
+                const [err, res] = await uni.chooseImage({ count: 1, sizeType: ['compressed'] });
+                console.log('[IMAGE] chooseImage result:', { err, res: res ? { tempFilePaths: res.tempFilePaths, tempFilesCount: res.tempFiles?.length } : null });
+                if (!err && (res.tempFilePaths?.length > 0 || res.tempFiles?.length > 0)) {
+                    await this.uploadImageFile(res.tempFilePaths[0], res.tempFiles?.[0]);
+                }
             }
+        },
+
+        createAndTriggerFileInput() {
+            console.log('[IMAGE] Creating file input...');
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = 'image/*';
+            input.style.display = 'none';
+
+            input.onchange = async (e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                    console.log('[IMAGE] File selected:', file.name, file.size);
+                    await this.uploadImageFile(file);
+                }
+                // Remove input after use
+                document.body.removeChild(input);
+            };
+
+            document.body.appendChild(input);
+            input.click();
+        },
+
+        async uploadImageFile(filePathOrBlob, tempFileBlob = null) {
+            try {
+                const app = getApp();
+                const httpUrl = app.globalData.serverUrl.replace('ws://', 'http://').replace('wss://', 'https://').replace('/ws', '');
+                console.log('[IMAGE] HTTP URL:', httpUrl);
+
+                const isH5 = typeof window !== 'undefined' && typeof document !== 'undefined';
+                let arrayBuffer;
+
+                if (isH5) {
+                    // For H5
+                    if (typeof filePathOrBlob === 'string') {
+                        // Blob URL - fetch it
+                        console.log('[IMAGE] Fetching blob URL:', filePathOrBlob);
+                        const response = await fetch(filePathOrBlob);
+                        arrayBuffer = await response.arrayBuffer();
+                    } else if (filePathOrBlob instanceof File) {
+                        // File object - read as ArrayBuffer
+                        console.log('[IMAGE] Reading File object...');
+                        arrayBuffer = await filePathOrBlob.arrayBuffer();
+                    } else if (tempFileBlob instanceof Blob) {
+                        console.log('[IMAGE] Reading Blob...');
+                        arrayBuffer = await tempFileBlob.arrayBuffer();
+                    }
+                } else {
+                    // For App/MiniProgram, use FileSystemManager
+                    console.log('[IMAGE] Using FileSystemManager...');
+                    const fs = uni.getFileSystemManager();
+                    arrayBuffer = await new Promise((resolve, reject) => {
+                        fs.readFile({
+                            filePath: filePathOrBlob,
+                            success: (fileRes) => resolve(fileRes.data),
+                            fail: reject
+                        });
+                    });
+                }
+
+                console.log('[IMAGE] ArrayBuffer size:', arrayBuffer.byteLength);
+
+                // Encrypt the binary data
+                const encryptedData = SecCrypto.encryptBinary(arrayBuffer, this.encryptionKey);
+                console.log('[IMAGE] Encrypted data size:', encryptedData.length);
+
+                // Upload encrypted data to server
+                const blob = new Blob([encryptedData], { type: 'application/octet-stream' });
+                const formData = new FormData();
+                formData.append('file', blob, 'encrypted_image.bin');
+
+                console.log('[IMAGE] Uploading to:', `${httpUrl}/api/upload`);
+                const uploadRes = await fetch(`${httpUrl}/api/upload`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                console.log('[IMAGE] Upload response status:', uploadRes.status);
+                if (!uploadRes.ok) {
+                    const errorText = await uploadRes.text();
+                    console.error('[IMAGE] Upload error:', errorText);
+                    throw new Error('Upload failed: ' + errorText);
+                }
+
+                const uploadData = await uploadRes.json();
+                console.log('[IMAGE] Upload response:', uploadData);
+                const imageUrl = `${httpUrl}${uploadData.url}`;
+
+                // Send image URL via WebSocket (URL is not encrypted, file content is)
+                console.log('[SEND] Sending image URL:', imageUrl);
+                SecWebSocket.sendMessage('image', imageUrl);
+
+            } catch (e) {
+                console.error('[IMAGE] Upload failed:', e);
+                uni.showToast({ title: '图片上传失败', icon: 'none' });
+            }
+        },
+        blobToBase64(blob) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result);
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+            });
+        },
+        urlToBase64(url) {
+            return new Promise((resolve, reject) => {
+                // #ifdef H5
+                // For H5, use fetch to handle blob URLs (uni.request cannot access blob: protocol)
+                fetch(url)
+                    .then(response => response.blob())
+                    .then(blob => this.blobToBase64(blob))
+                    .then(resolve)
+                    .catch(reject);
+                // #endif
+                // #ifndef H5
+                uni.request({
+                    url: url,
+                    responseType: 'arraybuffer',
+                    success: (res) => {
+                        const base64 = uni.arrayBufferToBase64(res.data);
+                        resolve('data:image/jpeg;base64,' + base64);
+                    },
+                    fail: reject
+                });
+                // #endif
+            });
         },
         previewImage(src) { uni.previewImage({ urls: [src] }); },
         insertEmoji(emoji) { this.inputText += emoji; this.showEmojiPicker = false; },
@@ -252,8 +469,28 @@ export default {
             const isToday = d.toDateString() === new Date().toDateString();
             return isToday ? '今天 ' + this.formatTime(ts) : d.toLocaleDateString('zh-CN') + ' ' + this.formatTime(ts);
         },
+        isMessageSelf(msg) {
+            // Match by ID OR by Name (for legacy/re-login compatibility)
+            return msg.from === this.userId || msg.fromName === this.userName;
+        },
         scrollToBottom() { if (this.messages.length) this.scrollToId = 'msg-' + this.messages[this.messages.length - 1].id; },
-        goToMembers() { uni.navigateTo({ url: '/pages/members/members' }); }
+        goToMembers() { uni.navigateTo({ url: '/pages/members/members' }); },
+        handleLogout() {
+            uni.showModal({
+                title: 'Tip',
+                content: 'Are you sure you want to logout?',
+                success: (res) => {
+                    if (res.confirm) {
+                        const app = getApp();
+                        app.globalData.encryptionKey = null;
+                        app.globalData.userId = '';
+                        app.globalData.userName = '';
+                        SecWebSocket.disconnect();
+                        uni.reLaunch({ url: '/pages/login/login' });
+                    }
+                }
+            });
+        }
     },
     onUnload() {
         SecWebSocket.off('message', this.onMessage);
@@ -267,13 +504,14 @@ export default {
 </script>
 
 <style scoped>
-.chat-page { display: flex; flex-direction: column; height: 100vh; background: #f5f5f5; }
-.chat-header { display: flex; justify-content: space-between; align-items: center; padding: 20rpx 30rpx; background: #fff; border-bottom: 1rpx solid #e5e5e5; padding-top: calc(20rpx + var(--status-bar-height)); }
+.chat-page { display: flex; flex-direction: column; height: 100vh; background: #1e1e1e; overflow: hidden; }
+.chat-header { display: flex; justify-content: space-between; align-items: center; padding: 20rpx 30rpx; background: #2c2c2c; border-bottom: 1rpx solid #333; padding-top: calc(20rpx + var(--status-bar-height)); color: white; flex-shrink: 0; }
 .header-title { font-size: 36rpx; font-weight: 600; }
+.header-right { display: flex; align-items: center; }
 .member-count { font-size: 24rpx; color: #888; margin-left: 16rpx; }
 .icon-btn { padding: 16rpx; font-size: 36rpx; }
 .loading-more { text-align: center; padding: 20rpx; font-size: 24rpx; color: #888; }
-.messages-container { flex: 1; padding: 20rpx; }
+.messages-container { flex: 1; padding: 20rpx; overflow: auto; min-height: 0; }
 .messages-list { display: flex; flex-direction: column; gap: 24rpx; }
 .time-divider { text-align: center; font-size: 24rpx; color: #888; margin: 20rpx 0; }
 .system-message { text-align: center; font-size: 24rpx; color: #888; background: rgba(0,0,0,0.05); padding: 12rpx 24rpx; border-radius: 24rpx; align-self: center; }
@@ -295,11 +533,11 @@ export default {
 .reply-preview { display: flex; align-items: center; justify-content: space-between; padding: 16rpx 30rpx; background: #ededed; }
 .reply-label { font-size: 26rpx; color: #07c160; }
 .close-btn { font-size: 40rpx; color: #888; padding: 0 16rpx; }
-.input-area { background: #fff; border-top: 1rpx solid #e5e5e5; padding: 16rpx; padding-bottom: calc(16rpx + env(safe-area-inset-bottom)); }
+.input-area { background: #2c2c2c; border-top: 1rpx solid #333; padding: 16rpx; padding-bottom: calc(16rpx + env(safe-area-inset-bottom)); flex-shrink: 0; }
 .input-toolbar { display: flex; gap: 16rpx; margin-bottom: 16rpx; }
 .tool-btn { font-size: 40rpx; padding: 8rpx; }
 .input-wrapper { display: flex; align-items: flex-end; gap: 16rpx; }
-.message-input { flex: 1; padding: 20rpx 28rpx; border: 2rpx solid #e5e5e5; border-radius: 40rpx; font-size: 30rpx; max-height: 200rpx; }
+.message-input { flex: 1; padding: 20rpx 28rpx; border: 2rpx solid #444; border-radius: 40rpx; font-size: 30rpx; max-height: 200rpx; color: white; background: #3a3a3a; }
 .send-btn { background: #ccc; color: #fff; padding: 20rpx 32rpx; border-radius: 40rpx; font-size: 28rpx; }
 .send-btn.active { background: #07c160; }
 .emoji-picker { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; padding: 20rpx; padding-bottom: calc(20rpx + env(safe-area-inset-bottom)); z-index: 100; }

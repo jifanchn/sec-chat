@@ -6,8 +6,9 @@ import (
 	"log"
 	"sync"
 
-	_ "github.com/mattn/go-sqlite3"
 	"sec-chat/server/models"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // Store handles data persistence
@@ -73,12 +74,12 @@ func (s *Store) SaveMessage(msg *models.Message) error {
 	defer s.mutex.Unlock()
 
 	mentions, _ := json.Marshal(msg.Mentions)
-	
+
 	_, err := s.db.Exec(`
 		INSERT INTO messages (id, type, from_id, from_name, content, timestamp, reply_to, mentions, recalled)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, msg.ID, msg.Type, msg.From, msg.FromName, msg.Content, msg.Timestamp, msg.ReplyTo, string(mentions), msg.Recalled)
-	
+
 	return err
 }
 
@@ -94,26 +95,26 @@ func (s *Store) GetMessages(beforeTimestamp int64, limit int) ([]*models.Message
 		ORDER BY timestamp DESC
 		LIMIT ?
 	`
-	
+
 	rows, err := s.db.Query(query, beforeTimestamp, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var messages []*models.Message
+	messages := make([]*models.Message, 0)
 	for rows.Next() {
 		msg := &models.Message{}
 		var mentions string
 		var replyTo sql.NullString
-		
-		err := rows.Scan(&msg.ID, &msg.Type, &msg.From, &msg.FromName, &msg.Content, 
+
+		err := rows.Scan(&msg.ID, &msg.Type, &msg.From, &msg.FromName, &msg.Content,
 			&msg.Timestamp, &replyTo, &mentions, &msg.Recalled)
 		if err != nil {
 			log.Printf("Error scanning message: %v", err)
 			continue
 		}
-		
+
 		if replyTo.Valid {
 			msg.ReplyTo = replyTo.String
 		}
@@ -147,7 +148,7 @@ func (s *Store) SaveUser(user *models.User) error {
 		INSERT OR REPLACE INTO users (id, name, avatar, last_seen)
 		VALUES (?, ?, ?, ?)
 	`, user.ID, user.Name, user.Avatar, user.LastSeen)
-	
+
 	return err
 }
 
@@ -162,11 +163,11 @@ func (s *Store) GetUsers() ([]*models.User, error) {
 	}
 	defer rows.Close()
 
-	var users []*models.User
+	users := make([]*models.User, 0)
 	for rows.Next() {
 		user := &models.User{}
 		var avatar sql.NullString
-		
+
 		err := rows.Scan(&user.ID, &user.Name, &avatar, &user.LastSeen)
 		if err != nil {
 			continue
