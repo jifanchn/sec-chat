@@ -23,11 +23,10 @@
                         <text class="label-icon">🌐</text>
                         <text class="label-text">SERVER</text>
                     </view>
-                    <input 
-                        class="input-field" 
-                        v-model="serverUrl" 
-                        placeholder="ws://192.168.1.100:8080/ws"
-                        placeholder-class="placeholder"
+                    <input
+                        class="input-field"
+                        v-model="serverUrl"
+                        placeholder=""
                         type="text"
                     />
                 </view>
@@ -103,10 +102,24 @@ export default {
     },
     onLoad() {
         this.loadCachedCredentials();
+        // 如果没有缓存的 serverUrl，使用当前域名作为默认值
+        if (!this.serverUrl) {
+            this.serverUrl = this.getDefaultServerUrl();
+        }
         SecWebSocket.on('auth_success', this.onAuthSuccess);
         SecWebSocket.on('error', this.onError);
     },
     methods: {
+        getDefaultServerUrl() {
+            // #ifdef H5
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const host = window.location.host;
+            return `${protocol}//${host}/ws`;
+            // #endif
+            // #ifndef H5
+            return '';
+            // #endif
+        },
         loadCachedCredentials() {
             try {
                 const cached = uni.getStorageSync('secChat_login');

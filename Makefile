@@ -1,158 +1,140 @@
 # SecChat Makefile
+# Build targets for local development (mac) and deployment (amd64)
 
-# Default password for development
-PASSWORD ?= secret123
-PORT ?= 8080
+.PHONY: all build build-mac build-amd64 build-frontend build-backend \
+        build-backend-mac build-backend-amd64 docker deploy clean help
 
-.PHONY: all server client dev build clean install test e2e e2e-install
+# Default target
+all: build-mac
 
-# Start both server and client
-all: dev
+# ============================================================================
+# Frontend Builds
+# ============================================================================
 
-# Install dependencies
-install:
-	cd client && npm install --legacy-peer-deps
+# Build frontend (H5)
+build-frontend:
+	@echo "Building frontend..."
+	cd client && npm install --legacy-peer-deps && npm run build:h5
+	@echo "Frontend built to client/dist/build/h5"
 
-# Build server binary
-build:
-	cd server && go build -o secchat-server .
+# ============================================================================
+# Backend Builds
+# ============================================================================
 
-# Start server only
-server: build
-	cd server && ./secchat-server -password $(PASSWORD) -port $(PORT)
+# Build backend for current platform (Mac ARM64)
+build-backend-mac:
+	@echo "Building backend for Mac (ARM64)..."
+	cd server && go build -trimpath -o secchat-server .
+	@echo "Backend built: server/secchat-server (Mac ARM64)"
 
-# Start client only (H5 dev mode)
-client:
+# Build backend for deployment (Linux AMD64)
+build-backend-amd64:
+	@echo "Building backend for Linux AMD64..."
+	cd server && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o secchat-server .
+	@echo "Backend built: server/secchat-server (Linux AMD64)"
+
+# ============================================================================
+# Combined Builds
+# ============================================================================
+
+# Build everything for Mac (local development)
+build-mac: build-frontend build-backend-mac
+	@echo "Mac build complete!"
+
+# Build everything for AMD64 (deployment)
+build-amd64: build-frontend build-backend-amd64
+	@echo "AMD64 build complete!"
+
+# Alias for build-mac
+build: build-mac
+
+# ============================================================================
+# Docker & Deployment
+# ============================================================================
+
+# Build Docker image (requires AMD64 backend)
+docker: build-amd64
+	@echo "Building Docker image..."
+	docker buildx build --platform linux/amd64 -t secchat:latest .
+	@echo "Docker image built: secchat:latest"
+
+# Package Docker image for transfer
+docker-save: docker
+	@echo "Saving Docker image..."
+	docker save secchat:latest | gzip > secchat.tar.gz
+	@echo "Docker image saved: secchat.tar.gz"
+
+# Deploy to server (101.37.37.87)
+deploy: docker-save
+	@echo "Uploading to server..."
+	scp secchat.tar.gz root@101.37.37.87:/tmp/
+	@echo "Deploying on server..."
+	ssh root@101.37.37.87 "docker load -i /tmp/secchat.tar.gz && cd /root/sec-chat && docker-compose down && docker-compose up -d"
+	@echo "Deployment complete!"
+
+# Quick deploy (skip docker rebuild if image exists)
+deploy-quick:
+	@echo "Uploading to server..."
+	scp secchat.tar.gz root@101.37.37.87:/tmp/
+	@echo "Deploying on server..."
+	ssh root@101.37.37.87 "docker load -i /tmp/secchat.tar.gz && cd /root/sec-chat && docker-compose down && docker-compose up -d"
+	@echo "Deployment complete!"
+
+# ============================================================================
+# Development
+# ============================================================================
+
+# Run backend locally
+run-backend:
+	cd server && go run .
+
+# Run frontend dev server
+run-frontend:
 	cd client && npm run dev:h5
 
-# Start both in background with logs
-dev:
-	@echo "Starting SecChat..."
-	@echo "Server: http://localhost:$(PORT)"
-	@echo "Client: http://localhost:5173"
-	@echo "Password: $(PASSWORD)"
-	@echo ""
-	@make -j2 _server _client
-
-_server: build
-	cd server && ./secchat-server -password $(PASSWORD) -port $(PORT) 2>&1 | tee server.log
-
-_client:
-	cd client && npm run dev:h5
+# ============================================================================
+# Utilities
+# ============================================================================
 
 # Clean build artifacts
 clean:
 	rm -f server/secchat-server
-	rm -f server/server.log
-	rm -rf server/data/
-	rm -rf client/dist/
-	rm -rf client/unpackage/
+	rm -f secchat.tar.gz
+	rm -rf client/dist
+	rm -rf client/unpackage
+	@echo "Cleaned build artifacts"
 
-# Run server tests
-test:
-	cd server && go test ./... -v
+# Show server logs
+logs:
+	ssh root@101.37.37.87 "cd /root/sec-chat && docker-compose logs -f"
 
-# Install E2E test dependencies
-e2e-install:
-	cd e2e && npm install
-
-# Run E2E tests (starts server & client automatically on test ports)
-e2e: build e2e-install
-	@echo "Starting E2E tests..."
-	@rm -rf server/data_test/
-	@cd server && ./secchat-server -password test123 -port 8081 -db data_test/chat.db > test_server.log 2>&1 & echo $$! > /tmp/secchat-server-test.pid
-	@sleep 5
-	@cd client && npm run dev:h5 -- --port 5174 & echo $$! > /tmp/secchat-client-test.pid
-	@sleep 10
-	@cd e2e && BASE_URL=http://localhost:5174 WS_URL=ws://localhost:8081/ws npm test || true
-	@kill `cat /tmp/secchat-server-test.pid` 2>/dev/null || true
-	@kill `cat /tmp/secchat-client-test.pid` 2>/dev/null || true
-	@pkill -f "secchat-server" 2>/dev/null || true
-	@pkill -f "vite" 2>/dev/null || true
-	@rm -rf server/data_test/
-	@echo "E2E tests completed"
+# Check server status
+status:
+	ssh root@101.37.37.87 "docker ps | grep secchat"
 
 # Help
 help:
-	@echo "SecChat Makefile Commands:"
-	@echo "  make install     - Install client dependencies"
-	@echo "  make dev         - Start both server and client (default)"
-	@echo "  make server      - Start server only"
-	@echo "  make client      - Start client only"
-	@echo "  make build       - Build server binary"
-	@echo "  make test        - Run server tests"
-	@echo "  make e2e         - Run E2E tests"
-	@echo "  make e2e-install - Install E2E dependencies"
-	@echo "  make clean       - Clean build artifacts"
+	@echo "SecChat Makefile Targets:"
 	@echo ""
-	@echo "Environment variables:"
-	@echo "  PASSWORD=xxx  - Server password (default: secret123)"
-	@echo "  PORT=xxxx     - Server port (default: 8080)"
-
-
-# Docker commands
-docker-build:
-	@echo "Building Docker image..."
-	@docker build -t secchat:latest .
-
-docker-run: docker-build
-	@echo "Running Docker container..."
-	@docker run -d \
-		--name secchat \
-		-p 8080:8080 \
-		-e PASSWORD=$(PASSWORD) \
-		-v secchat_data:/app/data \
-		--restart unless-stopped \
-		secchat:latest
-
-docker-stop:
-	@echo "Stopping Docker container..."
-	@docker stop secchat || true
-	@docker rm secchat || true
-
-docker-logs:
-	@docker logs -f secchat
-
-docker-compose-up:
-	@echo "Starting with docker-compose..."
-	@docker-compose up -d
-
-docker-compose-down:
-	@echo "Stopping with docker-compose..."
-	@docker-compose down
-
-docker-compose-logs:
-	@docker-compose logs -f
-
-# Docker commands
-docker-build:
-	echo "Building Docker image..."
-	docker build -t secchat:latest .
-
-docker-run: docker-build
-	echo "Running Docker container..."
-	docker run -d \\
-		--name secchat \\
-		-p 8080:8080 \\
-		-e PASSWORD=$(PASSWORD) \\
-		-v secchat_data:/app/data \\
-		--restart unless-stopped \\
-		secchat:latest
-
-docker-stop:
-	docker stop secchat || true
-	docker rm secchat || true
-
-docker-logs:
-	docker logs -f secchat
-
-docker-compose-up:
-	echo "Starting with docker-compose..."
-	docker-compose up -d
-
-docker-compose-down:
-	echo "Stopping with docker-compose..."
-	docker-compose down
-
-docker-compose-logs:
-	docker-compose logs -f
+	@echo "Build:"
+	@echo "  build-mac         Build for Mac (ARM64) - frontend + backend"
+	@echo "  build-amd64       Build for Linux AMD64 - frontend + backend"
+	@echo "  build-frontend    Build frontend only"
+	@echo "  build-backend-mac Build backend for Mac"
+	@echo "  build-backend-amd64 Build backend for Linux AMD64"
+	@echo ""
+	@echo "Docker & Deploy:"
+	@echo "  docker            Build Docker image"
+	@echo "  docker-save       Build and save Docker image to tar.gz"
+	@echo "  deploy            Full deploy: build, package, upload, start"
+	@echo "  deploy-quick      Quick deploy: upload existing tar.gz"
+	@echo ""
+	@echo "Development:"
+	@echo "  run-backend       Run backend locally"
+	@echo "  run-frontend      Run frontend dev server"
+	@echo ""
+	@echo "Utilities:"
+	@echo "  clean             Remove build artifacts"
+	@echo "  logs              View server logs"
+	@echo "  status            Check server status"
+	@echo "  help              Show this help"

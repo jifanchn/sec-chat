@@ -57,6 +57,7 @@ ssh_key*
 deploy-server.sh
 服务器部署说明.md
 DEPLOY.md.backup
+DEPLOY.md
 
 # OS files
 .DS_Store

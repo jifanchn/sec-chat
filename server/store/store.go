@@ -8,7 +8,7 @@ import (
 
 	"sec-chat/server/models"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/glebarez/sqlite"
 )
 
 // Store handles data persistence
@@ -21,7 +21,7 @@ var instance *Store
 
 // Init initializes the database
 func Init(dbPath string) (*Store, error) {
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, err
 	}

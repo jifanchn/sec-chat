@@ -6,13 +6,13 @@
 node_modules
 npm-debug.log
 client/node_modules
-client/dist
+# client/dist  # Allow pre-built frontend for deployment
 client/unpackage
 e2e/node_modules
 
 # Go
 server/data/
-server/secchat-server
+# server/secchat-server  # Allow pre-built binary for deployment
 server/*.log
 *.exe
 
