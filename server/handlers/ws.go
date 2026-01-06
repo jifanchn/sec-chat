@@ -246,6 +246,9 @@ func (c *Client) handleMessage(data []byte) {
 		c.handleRecall(msg)
 	case "read":
 		c.handleRead(msg)
+	case "ping":
+		// Respond to client heartbeat
+		c.sendJSON(map[string]interface{}{"type": "pong"})
 	}
 }
 

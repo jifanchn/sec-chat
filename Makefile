@@ -1,11 +1,41 @@
 # SecChat Makefile
-# Build targets for local development (mac) and deployment (amd64)
+# Build targets for multiple platforms
 
-.PHONY: all build build-mac build-amd64 build-frontend build-backend \
-        build-backend-mac build-backend-amd64 docker deploy clean help
+.PHONY: all build build-local build-linux-amd64 build-darwin-amd64 build-darwin-arm64 \
+        build-frontend build-backend build-backend-local build-backend-linux-amd64 \
+        build-backend-darwin-amd64 build-backend-darwin-arm64 docker deploy clean help
+
+# ============================================================================
+# Platform Detection
+# ============================================================================
+
+# Detect current OS and architecture
+UNAME_S := $(shell uname -s)
+UNAME_M := $(shell uname -m)
+
+# Map to Go GOOS/GOARCH
+ifeq ($(UNAME_S),Darwin)
+    LOCAL_GOOS := darwin
+else ifeq ($(UNAME_S),Linux)
+    LOCAL_GOOS := linux
+else
+    LOCAL_GOOS := $(shell echo $(UNAME_S) | tr '[:upper:]' '[:lower:]')
+endif
+
+ifeq ($(UNAME_M),x86_64)
+    LOCAL_GOARCH := amd64
+else ifeq ($(UNAME_M),arm64)
+    LOCAL_GOARCH := arm64
+else ifeq ($(UNAME_M),aarch64)
+    LOCAL_GOARCH := arm64
+else
+    LOCAL_GOARCH := $(UNAME_M)
+endif
+
+LOCAL_PLATFORM := $(LOCAL_GOOS)-$(LOCAL_GOARCH)
 
 # Default target
-all: build-mac
+all: build-local
 
 # ============================================================================
 # Frontend Builds
@@ -21,39 +51,62 @@ build-frontend:
 # Backend Builds
 # ============================================================================
 
-# Build backend for current platform (Mac ARM64)
-build-backend-mac:
-	@echo "Building backend for Mac (ARM64)..."
+# Build backend for current platform (auto-detect)
+build-backend-local:
+	@echo "Building backend for local platform ($(LOCAL_PLATFORM))..."
 	cd server && go build -trimpath -o secchat-server .
-	@echo "Backend built: server/secchat-server (Mac ARM64)"
+	@echo "Backend built: server/secchat-server ($(LOCAL_PLATFORM))"
 
-# Build backend for deployment (Linux AMD64)
-build-backend-amd64:
+# Build backend for Linux AMD64
+build-backend-linux-amd64:
 	@echo "Building backend for Linux AMD64..."
 	cd server && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o secchat-server .
-	@echo "Backend built: server/secchat-server (Linux AMD64)"
+	@echo "Backend built: server/secchat-server (linux-amd64)"
+
+# Build backend for Mac Intel
+build-backend-darwin-amd64:
+	@echo "Building backend for Mac Intel (darwin-amd64)..."
+	cd server && CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -o secchat-server .
+	@echo "Backend built: server/secchat-server (darwin-amd64)"
+
+# Build backend for Apple Silicon
+build-backend-darwin-arm64:
+	@echo "Building backend for Apple Silicon (darwin-arm64)..."
+	cd server && CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -o secchat-server .
+	@echo "Backend built: server/secchat-server (darwin-arm64)"
+
+# Alias for common targets
+build-backend: build-backend-local
 
 # ============================================================================
 # Combined Builds
 # ============================================================================
 
-# Build everything for Mac (local development)
-build-mac: build-frontend build-backend-mac
-	@echo "Mac build complete!"
+# Build everything for local platform (auto-detect)
+build-local: build-frontend build-backend-local
+	@echo "Local build complete ($(LOCAL_PLATFORM))!"
 
-# Build everything for AMD64 (deployment)
-build-amd64: build-frontend build-backend-amd64
-	@echo "AMD64 build complete!"
+# Build everything for Linux AMD64 (deployment)
+build-linux-amd64: build-frontend build-backend-linux-amd64
+	@echo "Linux AMD64 build complete!"
 
-# Alias for build-mac
-build: build-mac
+# Build everything for Mac Intel
+build-darwin-amd64: build-frontend build-backend-darwin-amd64
+	@echo "Mac Intel build complete!"
+
+# Build everything for Apple Silicon
+build-darwin-arm64: build-frontend build-backend-darwin-arm64
+	@echo "Apple Silicon build complete!"
+
+# Alias for build-local
+build: build-local
 
 # ============================================================================
 # Docker & Deployment
 # ============================================================================
 
-# Build Docker image (requires AMD64 backend)
-docker: build-amd64
+# Build Docker image (requires Linux AMD64 backend)
+docker: build-linux-amd64
 	@echo "Building Docker image..."
 	docker buildx build --platform linux/amd64 -t secchat:latest .
 	@echo "Docker image built: secchat:latest"
@@ -116,12 +169,16 @@ status:
 help:
 	@echo "SecChat Makefile Targets:"
 	@echo ""
-	@echo "Build:"
-	@echo "  build-mac         Build for Mac (ARM64) - frontend + backend"
-	@echo "  build-amd64       Build for Linux AMD64 - frontend + backend"
-	@echo "  build-frontend    Build frontend only"
-	@echo "  build-backend-mac Build backend for Mac"
-	@echo "  build-backend-amd64 Build backend for Linux AMD64"
+	@echo "Build (auto-detected platform: $(LOCAL_PLATFORM)):"
+	@echo "  build-local             Build for local platform - frontend + backend"
+	@echo "  build-linux-amd64       Build for Linux AMD64 - frontend + backend"
+	@echo "  build-darwin-amd64      Build for Mac Intel - frontend + backend"
+	@echo "  build-darwin-arm64      Build for Apple Silicon - frontend + backend"
+	@echo "  build-frontend          Build frontend only"
+	@echo "  build-backend-local     Build backend for local platform"
+	@echo "  build-backend-linux-amd64   Build backend for Linux AMD64"
+	@echo "  build-backend-darwin-amd64  Build backend for Mac Intel"
+	@echo "  build-backend-darwin-arm64  Build backend for Apple Silicon"
 	@echo ""
 	@echo "Docker & Deploy:"
 	@echo "  docker            Build Docker image"
@@ -138,3 +195,4 @@ help:
 	@echo "  logs              View server logs"
 	@echo "  status            Check server status"
 	@echo "  help              Show this help"
+

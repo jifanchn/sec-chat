@@ -25,7 +25,7 @@
                         <text>{{ msg.content }}</text>
                     </view>
                     
-                    <view v-else class="message" :class="{ self: isMessageSelf(msg) }" @longpress="showContextMenu($event, msg)">
+                    <view v-else class="message" :class="{ self: isMessageSelf(msg), pending: msg.pending, failed: msg.failed }" @longpress="showContextMenu($event, msg)">
                         <view class="message-avatar"><text>{{ getAvatarChar(msg.fromName) }}</text></view>
                         <view class="message-content">
                             <view class="message-header">
@@ -45,6 +45,13 @@
                                 <template v-else>
                                     <text>{{ msg.decryptedContent }}</text>
                                 </template>
+                            </view>
+                            <!-- Message status indicator -->
+                            <view v-if="msg.pending" class="message-status pending">
+                                <text>发送中...</text>
+                            </view>
+                            <view v-else-if="msg.failed" class="message-status failed" @click="retryMessage(msg)">
+                                <text>发送失败 ⟳</text>
                             </view>
                         </view>
                     </view>
@@ -198,7 +205,14 @@ export default {
             } catch (error) { console.error('Load members failed:', error); }
         },
         async onMessage(data) {
-            console.log('[RECV] onMessage called, type:', data.type, 'from:', data.fromName, 'content preview:', data.content?.substring(0, 50));
+            console.log('[RECV] onMessage called, type:', data.type, 'from:', data.fromName, 'id:', data.id);
+            
+            // Skip messages from self - they're already shown via optimistic UI
+            if (data.from === this.userId) {
+                console.log('[RECV] Skipping self message (already shown)');
+                return;
+            }
+            
             if (data.content && data.type !== 'system') {
                 try { 
                     if (data.type === 'image') {
@@ -220,7 +234,7 @@ export default {
             this.messages.push(data);
             console.log('[RECV] Total messages now:', this.messages.length);
             this.$nextTick(() => this.scrollToBottom());
-            if (data.from !== this.userId) SecWebSocket.sendRead(data.id);
+            SecWebSocket.sendRead(data.id);
         },
         async downloadAndDecryptImage(url) {
             // Download encrypted image from server
@@ -283,17 +297,60 @@ export default {
         async sendMessage() {
             const content = this.inputText.trim();
             if (!content) return;
+            
+            // Generate local ID for optimistic UI
+            const localId = 'local_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
+            const timestamp = Date.now();
+            
             try {
                 const encrypted = await SecCrypto.encrypt(content, this.encryptionKey);
                 const options = {};
                 if (this.replyingTo) options.replyTo = this.replyingTo.id;
-                console.log('[SEND] Sending message:', content);
-                SecWebSocket.sendMessage('text', encrypted, options);
+                
+                // Optimistic UI: Show message immediately with pending status
+                const pendingMsg = {
+                    id: localId,
+                    type: 'text',
+                    from: this.userId,
+                    fromName: this.userName,
+                    content: encrypted,
+                    decryptedContent: content,
+                    timestamp: timestamp,
+                    replyTo: options.replyTo,
+                    pending: true,  // Mark as pending
+                    failed: false
+                };
+                this.messages.push(pendingMsg);
+                this.$nextTick(() => this.scrollToBottom());
+                
                 this.inputText = '';
                 this.cancelReply();
+                
+                console.log('[SEND] Sending message:', content);
+                
+                // Send via WebSocket and wait for confirmation
+                try {
+                    const result = await SecWebSocket.sendMessage('text', encrypted, options);
+                    // Message delivered - update the pending message with server ID
+                    const idx = this.messages.findIndex(m => m.id === localId);
+                    if (idx !== -1) {
+                        this.messages[idx].id = result.id;
+                        this.messages[idx].pending = false;
+                        console.log('[SEND] Message delivered, id:', result.id);
+                    }
+                } catch (sendError) {
+                    // Delivery failed - mark as failed
+                    console.error('[SEND] Delivery failed:', sendError);
+                    const idx = this.messages.findIndex(m => m.id === localId);
+                    if (idx !== -1) {
+                        this.messages[idx].pending = false;
+                        this.messages[idx].failed = true;
+                    }
+                    uni.showToast({ title: '发送失败，点击重试', icon: 'none' });
+                }
             } catch (error) { 
-                console.error('[SEND] Send failed:', error);
-                uni.showToast({ title: '发送失败', icon: 'none' }); 
+                console.error('[SEND] Encryption failed:', error);
+                uni.showToast({ title: '加密失败', icon: 'none' }); 
             }
         },
         async chooseImage() {
@@ -453,6 +510,22 @@ export default {
             else if (action === 'recall' && msg.from === this.userId) SecWebSocket.sendRecall(msg.id);
             this.hideContextMenu();
         },
+        async retryMessage(msg) {
+            if (!msg.failed) return;
+            
+            // Remove failed message
+            const idx = this.messages.findIndex(m => m.id === msg.id);
+            if (idx !== -1) {
+                this.messages.splice(idx, 1);
+            }
+            
+            // Re-send the message
+            const content = msg.decryptedContent;
+            if (content) {
+                this.inputText = content;
+                await this.sendMessage();
+            }
+        },
         cancelReply() { this.replyingTo = null; },
         getReplyPreview(id) {
             const msg = this.messages.find(m => m.id === id);
@@ -547,4 +620,11 @@ export default {
 .context-menu { position: fixed; background: #fff; border-radius: 16rpx; box-shadow: 0 4rpx 20rpx rgba(0,0,0,0.15); z-index: 200; overflow: hidden; }
 .menu-item { padding: 24rpx 40rpx; font-size: 28rpx; border-bottom: 1rpx solid #f0f0f0; }
 .context-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 199; }
+/* Message status styles */
+.message.pending { opacity: 0.6; }
+.message.failed .message-bubble { border: 2rpx solid #ff4d4f; }
+.message-status { font-size: 22rpx; margin-top: 4rpx; }
+.message-status.pending { color: #888; }
+.message-status.failed { color: #ff4d4f; cursor: pointer; }
+.message.self .message-status { text-align: right; }
 </style>

@@ -1,5 +1,6 @@
 /**
  * SecChat WebSocket Module for uni-app
+ * With heartbeat and connection status monitoring
  */
 
 class SecWebSocket {
@@ -12,6 +13,9 @@ class SecWebSocket {
         this.listeners = {};
         this.connected = false;
         this.authenticated = false;
+        this.heartbeatInterval = null;
+        this.heartbeatTimeout = null;
+        this.pendingMessages = new Map(); // Track pending messages for delivery confirmation
     }
 
     connect(serverUrl) {
@@ -37,6 +41,7 @@ class SecWebSocket {
                         clearTimeout(timeout);
                         this.connected = true;
                         this.reconnectAttempts = 0;
+                        this.startHeartbeat();
                         this.emit('connected');
                         console.log('[WebSocket] Connected');
                         resolve();
@@ -50,12 +55,15 @@ class SecWebSocket {
                     };
 
                     ws.onmessage = (event) => {
+                        this.resetHeartbeatTimeout();
                         this.handleMessage(event.data);
                     };
 
-                    ws.onclose = () => {
+                    ws.onclose = (event) => {
+                        console.log('[WebSocket] Closed, code:', event.code, 'reason:', event.reason);
                         this.connected = false;
                         this.authenticated = false;
+                        this.stopHeartbeat();
                         this.emit('disconnected');
                         this.scheduleReconnect();
                     };
@@ -80,6 +88,7 @@ class SecWebSocket {
                         clearTimeout(timeout);
                         this.connected = true;
                         this.reconnectAttempts = 0;
+                        this.startHeartbeat();
                         this.emit('connected');
                         uni.offSocketOpen(onOpen);
                         uni.offSocketError(onError);
@@ -97,10 +106,14 @@ class SecWebSocket {
 
                     uni.onSocketOpen(onOpen);
                     uni.onSocketError(onError);
-                    uni.onSocketMessage((res) => this.handleMessage(res.data));
+                    uni.onSocketMessage((res) => {
+                        this.resetHeartbeatTimeout();
+                        this.handleMessage(res.data);
+                    });
                     uni.onSocketClose((res) => {
                         this.connected = false;
                         this.authenticated = false;
+                        this.stopHeartbeat();
                         this.emit('disconnected', res);
                         this.scheduleReconnect();
                     });
@@ -112,11 +125,89 @@ class SecWebSocket {
         });
     }
 
+    // Start heartbeat to keep connection alive
+    startHeartbeat() {
+        this.stopHeartbeat(); // Clear any existing
+        
+        // Send heartbeat every 5 seconds to keep connection alive
+        this.heartbeatInterval = setInterval(() => {
+            if (this.connected) {
+                console.log('[WebSocket] Sending heartbeat');
+                this.send({ type: 'ping' });
+            }
+        }, 5000);
+        
+        this.resetHeartbeatTimeout();
+    }
+
+    // Reset the heartbeat timeout (called when we receive any message)
+    resetHeartbeatTimeout() {
+        if (this.heartbeatTimeout) {
+            clearTimeout(this.heartbeatTimeout);
+        }
+        
+        // If we don't receive any message for 45 seconds, assume connection is dead
+        this.heartbeatTimeout = setTimeout(() => {
+            console.warn('[WebSocket] No response for 45 seconds, reconnecting...');
+            this.forceReconnect();
+        }, 45000);
+    }
+
+    // Stop heartbeat
+    stopHeartbeat() {
+        if (this.heartbeatInterval) {
+            clearInterval(this.heartbeatInterval);
+            this.heartbeatInterval = null;
+        }
+        if (this.heartbeatTimeout) {
+            clearTimeout(this.heartbeatTimeout);
+            this.heartbeatTimeout = null;
+        }
+    }
+
+    // Force reconnect
+    forceReconnect() {
+        console.log('[WebSocket] Force reconnecting...');
+        this.stopHeartbeat();
+        this.connected = false;
+        this.authenticated = false;
+        
+        const isH5 = typeof window !== 'undefined' && typeof document !== 'undefined';
+        if (isH5 && this.socket instanceof WebSocket) {
+            try { this.socket.close(); } catch (e) {}
+        } else if (this.socket) {
+            try { uni.closeSocket(); } catch (e) {}
+        }
+        this.socket = null;
+        
+        this.emit('disconnected');
+        this.scheduleReconnect();
+    }
+
     handleMessage(data) {
         try {
             const message = JSON.parse(data);
             const type = message.type;
-            if (type === 'auth_success') { this.authenticated = true; }
+            
+            // Handle pong response
+            if (type === 'pong') {
+                console.log('[WebSocket] Received pong');
+                return;
+            }
+            
+            if (type === 'auth_success') { 
+                this.authenticated = true; 
+            }
+            
+            // Handle message delivery confirmation
+            if ((type === 'text' || type === 'image') && message.id) {
+                if (this.pendingMessages.has(message.id)) {
+                    const callback = this.pendingMessages.get(message.id);
+                    this.pendingMessages.delete(message.id);
+                    if (callback) callback(true, message);
+                }
+            }
+            
             this.emit(type === 'text' || type === 'image' ? 'message' : type, message);
         } catch (error) {
             console.error('Parse failed:', error);
@@ -128,21 +219,60 @@ class SecWebSocket {
     }
 
     send(data) {
-        if (!this.connected) return;
+        if (!this.connected) {
+            console.warn('[WebSocket] Not connected, cannot send');
+            return false;
+        }
 
         const isH5 = typeof window !== 'undefined' && typeof document !== 'undefined';
         const message = typeof data === 'string' ? data : JSON.stringify(data);
 
-        if (isH5 && this.socket instanceof WebSocket) {
-            // H5: Use native WebSocket
-            this.socket.send(message);
-        } else {
-            // App/MiniProgram: Use uni.sendSocketMessage
-            uni.sendSocketMessage({ data: message });
+        try {
+            if (isH5 && this.socket instanceof WebSocket) {
+                // H5: Use native WebSocket
+                if (this.socket.readyState === WebSocket.OPEN) {
+                    this.socket.send(message);
+                    return true;
+                } else {
+                    console.warn('[WebSocket] Socket not open, state:', this.socket.readyState);
+                    return false;
+                }
+            } else {
+                // App/MiniProgram: Use uni.sendSocketMessage
+                uni.sendSocketMessage({ data: message });
+                return true;
+            }
+        } catch (error) {
+            console.error('[WebSocket] Send error:', error);
+            return false;
         }
     }
 
     sendMessage(type, content, options = {}) {
+        const id = Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
+        const sent = this.send({ type, id, content, timestamp: Date.now(), ...options });
+        
+        if (sent) {
+            // Track pending message with 10 second timeout
+            return new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    this.pendingMessages.delete(id);
+                    reject(new Error('Message delivery timeout'));
+                }, 10000);
+                
+                this.pendingMessages.set(id, (success, message) => {
+                    clearTimeout(timeout);
+                    if (success) resolve({ id, message });
+                    else reject(new Error('Message delivery failed'));
+                });
+            });
+        } else {
+            return Promise.reject(new Error('Not connected'));
+        }
+    }
+
+    // Legacy sync version for compatibility
+    sendMessageSync(type, content, options = {}) {
         const id = Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
         this.send({ type, id, content, timestamp: Date.now(), ...options });
         return id;
@@ -156,12 +286,16 @@ class SecWebSocket {
         this.reconnectAttempts++;
         const delay = Math.min(this.baseReconnectDelay * this.reconnectAttempts, this.maxReconnectDelay);
         this.emit('reconnecting', { attempt: this.reconnectAttempts, delay });
+        console.log(`[WebSocket] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
         setTimeout(() => {
             this.connect(this.serverUrl).catch(() => this.scheduleReconnect());
         }, delay);
     }
 
     disconnect() {
+        this.stopHeartbeat();
+        this.reconnectAttempts = 999; // Prevent auto-reconnect
+        
         const isH5 = typeof window !== 'undefined' && typeof document !== 'undefined';
 
         if (isH5 && this.socket instanceof WebSocket) {
@@ -177,6 +311,14 @@ class SecWebSocket {
                 this.socket = null;
             }
         }
+        
+        this.connected = false;
+        this.authenticated = false;
+    }
+
+    // Check if currently connected
+    isConnected() {
+        return this.connected && this.authenticated;
     }
 
     on(event, callback) {
