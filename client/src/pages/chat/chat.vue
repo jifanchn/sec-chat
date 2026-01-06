@@ -1075,7 +1075,7 @@ export default {
 .message-content { display: flex; flex-direction: column; gap: 8rpx; }
 .message-header { display: flex; align-items: center; gap: 16rpx; font-size: 24rpx; color: #888; }
 .message.self .message-header { flex-direction: row-reverse; }
-.message-bubble { padding: 20rpx 28rpx; border-radius: 16rpx; background: #fff; font-size: 30rpx; }
+.message-bubble { padding: 20rpx 28rpx; border-radius: 16rpx; background: #95ec69; font-size: 30rpx; color: #000; }
 .message:not(.self) .message-bubble { border-top-left-radius: 0; }
 .message.self .message-bubble { background: #95ec69; border-top-right-radius: 0; }
 .message-bubble.image { padding: 8rpx; background: transparent; }
