@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // MessageType defines the type of message
 type MessageType string
@@ -53,5 +56,5 @@ func SystemMessage(content string) *Message {
 
 // generateID creates a unique message ID
 func generateID() string {
-	return time.Now().Format("20060102150405.000000")
+	return fmt.Sprintf("%s-%d", time.Now().Format("20060102150405.000000"), time.Now().UnixNano()%1000000)
 }

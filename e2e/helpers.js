@@ -6,7 +6,7 @@ const WebSocket = require('ws');
 const crypto = require('crypto');
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:5174';
-const WS_URL = process.env.WS_URL || 'ws://127.0.0.1:8081/ws';
+const WS_URL = process.env.WS_URL || 'ws://localhost:8081/ws';
 const DEFAULT_PASSWORD = 'test123';
 
 /**
@@ -66,34 +66,55 @@ async function login(page, nickname, password = DEFAULT_PASSWORD) {
 
     console.log('[LOGIN] Filling form with nickname:', nickname);
 
-    // Fill each input with focus, type, and blur
-    // Server URL
-    await page.click('.input-group:nth-child(1) .input-field');
-    await sleep(50);
-    await page.keyboard.type(WS_URL);
-    await sleep(100);
+    // uni-app H5 sometimes makes programmatic value setting not propagate to v-model reliably.
+    // Use real typing events, but still target the three `.input-field` elements by order.
+    await page.waitForFunction(() => document.querySelectorAll('.input-group input').length >= 3, { timeout: 10000 });
 
-    // Password
-    await page.click('.input-group:nth-child(2) .input-field');
-    await sleep(50);
-    await page.keyboard.type(password);
-    await sleep(100);
+    const inputs = await page.$$('.input-group input');
+    if (inputs.length < 3) throw new Error(`Login form not ready: expected 3 inputs, got ${inputs.length}`);
 
-    // Nickname
-    await page.click('.input-group:nth-child(3) .input-field');
-    await sleep(50);
-    await page.keyboard.type(nickname);
-    await sleep(100);
+    const clearAndTypeByIndex = async (idx, text) => {
+        const el = inputs[idx];
+        await el.click({ clickCount: 3 });
+        await page.keyboard.press('Backspace');
+        await sleep(50);
+        await el.type(text, { delay: 10 });
+        await sleep(100);
+    };
+
+    // 0: server, 1: password, 2: nickname
+    await clearAndTypeByIndex(0, WS_URL);
+    await clearAndTypeByIndex(1, password);
+    await clearAndTypeByIndex(2, nickname);
+
+    // DEBUG: Check values
+    const [serverVal, passVal, nickVal] = await page.$$eval('.input-group input', els => els.slice(0, 3).map(el => el.value));
+    console.log(`[LOGIN] Verifying inputs: Srv="${serverVal}" PassLen=${passVal.length} Nick="${nickVal}"`);
 
     console.log('[LOGIN] Clicking login button...');
 
     // Click login button
     await page.click('.login-btn');
 
-    // Wait a bit for login processing
-    await sleep(2000);
+    // Wait for login processing
+    const loginStart = Date.now();
+    const maxWait = 15000;
+    while (Date.now() - loginStart < maxWait) {
+        // If we reached chat, we're good
+        const chat = await page.$('.chat-page');
+        if (chat) break;
 
-    // Check if there's an error
+        // If we see an error, fail fast
+        const errorBoxNow = await page.$('.error-box');
+        if (errorBoxNow) {
+            const errorText = await page.$eval('.error-text', el => el.textContent);
+            console.error('[LOGIN] Login error:', errorText);
+            throw new Error(`Login failed: ${errorText}`);
+        }
+        await sleep(300);
+    }
+
+    // Final error check
     const errorBox = await page.$('.error-box');
     if (errorBox) {
         const errorText = await page.$eval('.error-text', el => el.textContent);
@@ -111,12 +132,21 @@ async function login(page, nickname, password = DEFAULT_PASSWORD) {
         console.error('[LOGIN] Still on login page after 2 seconds');
         // Take screenshot
         await screenshot(page, 'login_stuck');
+        // If we're still on the login page and no error box was shown, treat as a failed login.
+        // This avoids waiting the full chat-page timeout and makes failures easier to debug.
+        throw new Error('Login stuck on login page');
     }
 
     // Wait for redirect to chat page
     console.log('[LOGIN] Waiting for .chat-page...');
-    await page.waitForSelector('.chat-page', { timeout: 10000 });
-    console.log('[LOGIN] Successfully navigated to chat page');
+    try {
+        await page.waitForSelector('.chat-page', { timeout: 30000 });
+        console.log('[LOGIN] Successfully navigated to chat page');
+    } catch (e) {
+        console.error('[LOGIN] Timeout waiting for .chat-page');
+        await screenshot(page, 'login_timeout');
+        throw e;
+    }
     await sleep(500); // Let messages load
 }
 

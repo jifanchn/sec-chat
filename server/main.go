@@ -45,6 +45,7 @@ func main() {
 	http.Handle("/api/messages", corsMiddleware(http.HandlerFunc(handlers.HandleMessages)))
 	http.Handle("/api/upload", corsMiddleware(http.HandlerFunc(handlers.HandleUpload)))
 	http.Handle("/api/members", corsMiddleware(http.HandlerFunc(handlers.HandleMembers)))
+	http.Handle("/api/user/avatar", corsMiddleware(http.HandlerFunc(handlers.HandleAvatarUpdate)))
 
 	// Serve uploaded files with CORS support
 	http.Handle("/uploads/", corsMiddleware(http.StripPrefix("/uploads/",

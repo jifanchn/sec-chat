@@ -26,6 +26,7 @@ server/secchat-server
 server/server.log
 server/data/
 server/data_test/
+data/
 
 # Client specific
 client/dist/

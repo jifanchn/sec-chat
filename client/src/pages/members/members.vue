@@ -7,17 +7,20 @@
         </view>
         <view class="members-header">
             <text class="header-title">在线成员</text>
-            <text class="member-count">{{ members.length }}人</text>
+            <text class="member-count">{{ onlineMembers.length }}人</text>
         </view>
         <view class="members-list">
-            <view v-for="member in members" :key="member.id" class="member-item">
-                <view class="member-avatar"><text>{{ getAvatarChar(member.name) }}</text></view>
+            <view v-for="member in onlineMembers" :key="member.id" class="member-item">
+                <view class="member-avatar">
+                    <image v-if="member.avatar" :src="member.avatar" mode="aspectFill" class="avatar-image"/>
+                    <text v-else>{{ getAvatarChar(member.name) }}</text>
+                </view>
                 <view class="member-info">
                     <text class="member-name">{{ member.name }}<text v-if="member.id === userId" class="self-tag"> (我)</text></text>
                     <view class="online-indicator"><view class="online-dot"></view><text>在线</text></view>
                 </view>
             </view>
-            <view v-if="members.length === 0" class="empty-state"><text>暂无在线成员</text></view>
+            <view v-if="onlineMembers.length === 0" class="empty-state"><text>暂无在线成员</text></view>
         </view>
     </view>
 </template>
@@ -29,17 +32,41 @@ export default {
     data() {
         return { userId: '', members: [] };
     },
+    computed: {
+        onlineMembers() {
+            return this.members.filter(m => m.online);
+        }
+    },
     onLoad() {
         this.userId = getApp().globalData.userId;
         this.userName = getApp().globalData.userName;
         SecWebSocket.on('users', this.onUsers);
-        // Initialize with current online users from WebSocket cached data
+        // Initialize with current online users from WebSocket cached data and fetch from API
         this.initMembers();
+        this.loadMembers();
     },
     methods: {
         initMembers() {
             // Ensure self is in the list initially
             this.members = this.ensureSelf([]);
+        },
+        async loadMembers() {
+            try {
+                const app = getApp();
+                const httpUrl = app.globalData.serverUrl.replace('ws://', 'http://').replace('wss://', 'https://').replace('/ws', '');
+                const response = await uni.request({ url: `${httpUrl}/api/members`, method: 'GET' });
+                let err = null, res = null;
+                // Handle different uni.request return formats
+                if (Array.isArray(response)) { [err, res] = response; }
+                else { res = response; }
+
+                if (!err && res.data?.members) {
+                    this.members = this.ensureSelf(res.data.members);
+                    console.log('[MEMBERS] Loaded from API:', this.members.length);
+                } else {
+                    console.error('Failed to load members:', err || res);
+                }
+            } catch (error) { console.error('Load members exception:', error); }
         },
         onUsers(data) { 
             if (data.users) {
@@ -51,7 +78,8 @@ export default {
                 return [...list, { 
                     id: this.userId, 
                     name: this.userName || getApp().globalData.userName, 
-                    online: true 
+                    online: true,
+                    avatar: getApp().globalData.avatarUrl 
                 }];
             }
             return list;
@@ -74,8 +102,9 @@ export default {
 .member-count { font-size: 24rpx; color: #888; }
 .members-list { background: #2c2c2c; }
 .member-item { display: flex; align-items: center; gap: 24rpx; padding: 24rpx 30rpx; border-bottom: 1rpx solid #333; }
-.member-avatar { width: 80rpx; height: 80rpx; border-radius: 8rpx; background: linear-gradient(135deg, #667eea, #764ba2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.member-avatar { width: 80rpx; height: 80rpx; border-radius: 8rpx; background: linear-gradient(135deg, #667eea, #764ba2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; overflow: hidden; }
 .member-avatar text { color: #fff; font-size: 32rpx; font-weight: 600; }
+.avatar-image { width: 100%; height: 100%; }
 .member-info { flex: 1; display: flex; flex-direction: column; gap: 8rpx; }
 .member-name { font-size: 30rpx; font-weight: 500; color: #fff; }
 .self-tag { color: #07c160; font-size: 24rpx; }

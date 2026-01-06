@@ -50,3 +50,13 @@ func TestUserSetOnline(t *testing.T) {
 		t.Error("SetOnline() should update LastSeen")
 	}
 }
+
+func TestUserAvatar(t *testing.T) {
+	user := NewUser("user1", "Test")
+	avatarURL := "http://example.com/avatar.png"
+	user.Avatar = avatarURL
+
+	if user.Avatar != avatarURL {
+		t.Errorf("Avatar not set correctly. Got %v, want %v", user.Avatar, avatarURL)
+	}
+}

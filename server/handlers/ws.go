@@ -25,7 +25,6 @@ type Client struct {
 // Hub manages all WebSocket clients
 type Hub struct {
 	clients    map[*Client]bool
-	users      map[string]*Client // userID -> client
 	broadcast  chan []byte
 	register   chan *Client
 	unregister chan *Client
@@ -38,7 +37,6 @@ var hub *Hub
 func InitHub() *Hub {
 	hub = &Hub{
 		clients:    make(map[*Client]bool),
-		users:      make(map[string]*Client),
 		broadcast:  make(chan []byte, 256),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
@@ -65,12 +63,25 @@ func (h *Hub) run() {
 			h.mutex.Lock()
 			if _, ok := h.clients[client]; ok {
 				delete(h.clients, client)
+				close(client.send)
+
 				if client.user != nil {
-					delete(h.users, client.user.ID)
-					// Notify others about user leaving
-					msg := models.SystemMessage(client.user.Name + " left the chat")
-					h.broadcastMessage(msg)
-					// Broadcast updated users list
+					// Check if user still has other connections
+					isOnline := false
+					for c := range h.clients {
+						if c.user != nil && c.user.ID == client.user.ID {
+							isOnline = true
+							break
+						}
+					}
+
+					// Only notify "left" if no other connections remain
+					if !isOnline {
+						msg := models.SystemMessage(client.user.Name + " left the chat")
+						h.broadcastMessage(msg)
+					}
+
+					// Always broadcast updated users list
 					usersMsg := map[string]interface{}{
 						"type":  "users",
 						"users": h.getOnlineUsersUnlocked(),
@@ -78,7 +89,6 @@ func (h *Hub) run() {
 					data, _ := json.Marshal(usersMsg)
 					h.broadcast <- data
 				}
-				close(client.send)
 			}
 			h.mutex.Unlock()
 
@@ -118,15 +128,67 @@ func (h *Hub) GetOnlineUsers() []*models.User {
 
 // getOnlineUsersUnlocked returns list of online users without locking (caller must hold lock)
 func (h *Hub) getOnlineUsersUnlocked() []*models.User {
-	var users []*models.User
-	// Use users map to avoid duplicates (same user with multiple connections)
-	for _, client := range h.users {
+	userMap := make(map[string]*models.User)
+	for client := range h.clients {
 		if client.verified && client.user != nil {
 			client.user.Online = true
-			users = append(users, client.user)
+			userMap[client.user.ID] = client.user
 		}
 	}
+
+	users := make([]*models.User, 0, len(userMap))
+	for _, user := range userMap {
+		users = append(users, user)
+	}
 	return users
+}
+
+// BroadcastUsers broadcasts the current list of online users to all clients
+func (h *Hub) BroadcastUsers() {
+	h.mutex.RLock()
+	onlineUsers := h.getOnlineUsersUnlocked()
+	h.mutex.RUnlock()
+
+	// Fetch latest avatar info from database
+	dbUsers, err := store.Get().GetUsers()
+	if err == nil {
+		dbAvatarMap := make(map[string]string)
+		for _, u := range dbUsers {
+			if u.Avatar != "" {
+				dbAvatarMap[u.ID] = u.Avatar
+			}
+		}
+		// Update online users with latest avatars from DB
+		for _, u := range onlineUsers {
+			if dbAvatar, ok := dbAvatarMap[u.ID]; ok && dbAvatar != "" {
+				u.Avatar = dbAvatar
+			}
+		}
+	}
+
+	usersMsg := map[string]interface{}{
+		"type":  "users",
+		"users": onlineUsers,
+	}
+	data, _ := json.Marshal(usersMsg)
+
+	// Non-blocking send to broadcast channel
+	select {
+	case h.broadcast <- data:
+	default:
+	}
+}
+
+// UpdateUserAvatar updates the avatar for a connected user
+func (h *Hub) UpdateUserAvatar(userID, avatar string) {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+
+	for client := range h.clients {
+		if client.user != nil && client.user.ID == userID {
+			client.user.Avatar = avatar
+		}
+	}
 }
 
 // WSMessage represents a WebSocket message
@@ -147,6 +209,7 @@ type AuthPayload struct {
 	PasswordHash string `json:"passwordHash"`
 	UserID       string `json:"userId"`
 	UserName     string `json:"userName"`
+	Avatar       string `json:"avatar,omitempty"`
 }
 
 // HandleWebSocket handles WebSocket connections
@@ -248,7 +311,10 @@ func (c *Client) handleMessage(data []byte) {
 		c.handleRead(msg)
 	case "ping":
 		// Respond to client heartbeat
-		c.sendJSON(map[string]interface{}{"type": "pong"})
+		c.sendJSON(map[string]interface{}{
+			"type":    "pong",
+			"version": config.Get().Version,
+		})
 	}
 }
 
@@ -267,16 +333,31 @@ func (c *Client) handleAuth(msg WSMessage) {
 		return
 	}
 
-	// Create user
-	c.user = models.NewUser(auth.UserID, auth.UserName)
-	c.verified = true
+	user := models.NewUser(auth.UserID, auth.UserName)
 
-	// Register user
+	// Try to load existing avatar from database if not provided in auth payload
+	if auth.Avatar != "" {
+		user.Avatar = auth.Avatar
+	} else {
+		// Check if user exists in database and has avatar
+		dbUsers, err := store.Get().GetUsers()
+		if err == nil {
+			for _, u := range dbUsers {
+				if u.ID == auth.UserID && u.Avatar != "" {
+					user.Avatar = u.Avatar
+					break
+				}
+			}
+		}
+	}
+
+	// Update client state safely
 	c.hub.mutex.Lock()
-	c.hub.users[c.user.ID] = c
+	c.user = user
+	c.verified = true
 	c.hub.mutex.Unlock()
 
-	// Save user to database
+	// Save user to database (will update last_seen timestamp)
 	store.Get().SaveUser(c.user)
 
 	// Send auth success
@@ -287,9 +368,22 @@ func (c *Client) handleAuth(msg WSMessage) {
 	})
 
 	// Notify others
-	sysMsg := models.SystemMessage(c.user.Name + " joined the chat")
-	store.Get().SaveMessage(sysMsg)
-	c.hub.broadcastMessage(sysMsg)
+	// Check if this is a new user (not just a new connection)
+	c.hub.mutex.RLock()
+	isNewUser := true
+	for client := range c.hub.clients {
+		if client != c && client.user != nil && client.user.ID == c.user.ID {
+			isNewUser = false
+			break
+		}
+	}
+	c.hub.mutex.RUnlock()
+
+	if isNewUser {
+		sysMsg := models.SystemMessage(c.user.Name + " joined the chat")
+		store.Get().SaveMessage(sysMsg)
+		c.hub.broadcastMessage(sysMsg)
+	}
 
 	// Broadcast online users to all clients
 	usersMsg := map[string]interface{}{
@@ -321,6 +415,8 @@ func (c *Client) handleChatMessage(msg WSMessage) {
 	// Save to database
 	if err := store.Get().SaveMessage(chatMsg); err != nil {
 		log.Printf("Error saving message: %v", err)
+		c.sendError("Failed to save message")
+		return
 	}
 
 	// Broadcast to all clients
@@ -349,7 +445,11 @@ func (c *Client) handleRecall(msg WSMessage) {
 	}
 
 	// Update database
-	store.Get().RecallMessage(msg.ID)
+	if err := store.Get().RecallMessage(msg.ID); err != nil {
+		log.Printf("Error recalling message: %v", err)
+		c.sendError("Failed to recall message")
+		return
+	}
 
 	// Broadcast recall
 	recallMsg := map[string]interface{}{

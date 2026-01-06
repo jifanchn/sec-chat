@@ -76,7 +76,7 @@ func (s *Store) SaveMessage(msg *models.Message) error {
 	mentions, _ := json.Marshal(msg.Mentions)
 
 	_, err := s.db.Exec(`
-		INSERT INTO messages (id, type, from_id, from_name, content, timestamp, reply_to, mentions, recalled)
+		INSERT OR IGNORE INTO messages (id, type, from_id, from_name, content, timestamp, reply_to, mentions, recalled)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, msg.ID, msg.Type, msg.From, msg.FromName, msg.Content, msg.Timestamp, msg.ReplyTo, string(mentions), msg.Recalled)
 

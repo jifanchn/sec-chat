@@ -58,6 +58,7 @@
                         type="text"
                     />
                 </view>
+
                 
                 <button 
                     class="login-btn" 
@@ -136,7 +137,7 @@ export default {
             try {
                 uni.setStorageSync('secChat_login', {
                     serverUrl: this.serverUrl,
-                    nickname: this.nickname
+                    nickname: this.nickname,
                 });
             } catch (e) {
                 console.error('Cache save failed:', e);
@@ -171,21 +172,51 @@ export default {
                 app.globalData.userName = this.nickname.trim();
                 app.globalData.serverUrl = this.serverUrl.trim();
                 app.globalData.encryptionKey = encryptionKey;
+                app.globalData.encryptionKey = encryptionKey;
+                app.globalData.avatarUrl = ''; // Clean up global data if previously set or set to default
                 
                 this.saveCachedCredentials();
                 
                 await SecWebSocket.connect(this.serverUrl.trim());
-                SecWebSocket.authenticate(passwordHash, userId, this.nickname.trim());
+                SecWebSocket.authenticate(passwordHash, userId, this.nickname.trim(), '');
+                
                 
             } catch (error) {
-                console.error('Login failed:', error);
+                console.error('Login failed object:', error);
+                console.error('Login failed message:', error.message);
+                console.error('Login failed stack:', error.stack);
                 this.errorMsg = error.message || 'Connection failed';
                 this.loading = false;
             }
         },
         
-        onAuthSuccess(data) {
+        async onAuthSuccess(data) {
             this.loading = false;
+            
+            // Fetch user's saved avatar from database
+            try {
+                const app = getApp();
+                const httpUrl = app.globalData.serverUrl.replace('ws://', 'http://').replace('wss://', 'https://').replace('/ws', '');
+                const response = await uni.request({ url: `${httpUrl}/api/members`, method: 'GET' });
+                let err = null, res = null;
+                if (Array.isArray(response)) { [err, res] = response; }
+                else { res = response; }
+
+                if (!err && res.data?.members) {
+                    const me = res.data.members.find(m => m.id === app.globalData.userId);
+                    if (me && me.avatar) {
+                        console.log('[LOGIN] Loaded saved avatar:', me.avatar);
+                        app.globalData.avatarUrl = me.avatar;
+                        // Update WebSocket auth credentials with avatar for reconnection
+                        if (window.SecWebSocketInstance && window.SecWebSocketInstance.authCredentials) {
+                            window.SecWebSocketInstance.authCredentials.avatar = me.avatar;
+                        }
+                    }
+                }
+            } catch (e) {
+                console.warn('[LOGIN] Could not fetch saved avatar:', e);
+            }
+            
             uni.redirectTo({ url: '/pages/chat/chat' });
         },
         

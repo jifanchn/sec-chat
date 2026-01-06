@@ -17,9 +17,11 @@ type Config struct {
 	PasswordHash string
 	DBPath       string
 	UploadDir    string
+	Version      string
 }
 
 var cfg *Config
+var AppVersion string
 
 // Init initializes configuration from command line arguments and environment variables
 func Init() *Config {
@@ -64,6 +66,11 @@ func Init() *Config {
 	// Ensure directories exist
 	ensureDir(filepath.Dir(cfg.DBPath))
 	ensureDir(cfg.UploadDir)
+
+	cfg.Version = AppVersion
+	if cfg.Version == "" {
+		cfg.Version = "dev"
+	}
 
 	return cfg
 }

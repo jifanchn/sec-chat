@@ -16,6 +16,9 @@ class SecWebSocket {
         this.heartbeatInterval = null;
         this.heartbeatTimeout = null;
         this.pendingMessages = new Map(); // Track pending messages for delivery confirmation
+        this.serverVersion = null;
+        // Store auth credentials for reconnection
+        this.authCredentials = null;
     }
 
     connect(serverUrl) {
@@ -44,6 +47,18 @@ class SecWebSocket {
                         this.startHeartbeat();
                         this.emit('connected');
                         console.log('[WebSocket] Connected');
+                        
+                        // Auto-authenticate on reconnection
+                        if (this.authCredentials) {
+                            console.log('[WebSocket] Re-authenticating after reconnection');
+                            this.authenticate(
+                                this.authCredentials.passwordHash,
+                                this.authCredentials.userId,
+                                this.authCredentials.userName,
+                                this.authCredentials.avatar
+                            );
+                        }
+                        
                         resolve();
                     };
 
@@ -90,6 +105,18 @@ class SecWebSocket {
                         this.reconnectAttempts = 0;
                         this.startHeartbeat();
                         this.emit('connected');
+                        
+                        // Auto-authenticate on reconnection
+                        if (this.authCredentials) {
+                            console.log('[WebSocket] Re-authenticating after reconnection');
+                            this.authenticate(
+                                this.authCredentials.passwordHash,
+                                this.authCredentials.userId,
+                                this.authCredentials.userName,
+                                this.authCredentials.avatar
+                            );
+                        }
+                        
                         uni.offSocketOpen(onOpen);
                         uni.offSocketError(onError);
                         resolve();
@@ -191,7 +218,21 @@ class SecWebSocket {
             
             // Handle pong response
             if (type === 'pong') {
-                console.log('[WebSocket] Received pong');
+                console.log('[WebSocket] Received pong', message.version);
+                if (message.version) {
+                    if (this.serverVersion === null) {
+                        this.serverVersion = message.version;
+                        console.log('[WebSocket] Server version:', this.serverVersion);
+                    } else if (this.serverVersion !== message.version) {
+                        console.log('[WebSocket] Version changed:', this.serverVersion, '->', message.version);
+                        // Version changed, reload page
+                        // Only reload in H5/Browser environment
+                        if (typeof window !== 'undefined' && window.location) {
+                             console.log('[WebSocket] Reloading page due to version update...');
+                             window.location.reload();
+                        }
+                    }
+                }
                 return;
             }
             
@@ -214,8 +255,10 @@ class SecWebSocket {
         }
     }
 
-    authenticate(passwordHash, userId, userName) {
-        this.send({ type: 'auth', payload: { passwordHash, userId, userName } });
+    authenticate(passwordHash, userId, userName, avatar) {
+        // Store credentials for reconnection
+        this.authCredentials = { passwordHash, userId, userName, avatar };
+        this.send({ type: 'auth', payload: { passwordHash, userId, userName, avatar } });
     }
 
     send(data) {
@@ -249,7 +292,7 @@ class SecWebSocket {
     }
 
     sendMessage(type, content, options = {}) {
-        const id = Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
+        const id = options.id || (Date.now().toString(36) + Math.random().toString(36).substr(2, 9));
         const sent = this.send({ type, id, content, timestamp: Date.now(), ...options });
         
         if (sent) {
@@ -295,6 +338,7 @@ class SecWebSocket {
     disconnect() {
         this.stopHeartbeat();
         this.reconnectAttempts = 999; // Prevent auto-reconnect
+        this.authCredentials = null; // Clear stored credentials
         
         const isH5 = typeof window !== 'undefined' && typeof document !== 'undefined';
 
@@ -338,4 +382,11 @@ class SecWebSocket {
     }
 }
 
-export default new SecWebSocket();
+const instance = new SecWebSocket();
+
+// Expose to window for E2E testing
+if (typeof window !== 'undefined') {
+    window.SecWebSocketInstance = instance;
+}
+
+export default instance;

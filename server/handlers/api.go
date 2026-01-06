@@ -12,6 +12,7 @@ import (
 
 	"sec-chat/server/config"
 	"sec-chat/server/crypto"
+	"sec-chat/server/models"
 	"sec-chat/server/store"
 )
 
@@ -198,4 +199,76 @@ func randomString(length int) string {
 		time.Sleep(time.Nanosecond)
 	}
 	return string(b)
+}
+
+// HandleAvatarUpdate handles avatar updates
+func HandleAvatarUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		UserID string `json:"userId"`
+		Avatar string `json:"avatar"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "Invalid request body",
+		})
+		return
+	}
+
+	if req.UserID == "" || req.Avatar == "" {
+		sendJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "Missing userId or avatar",
+		})
+		return
+	}
+
+	// Update user in database
+	// We need to fetch the existing user first to preserve other fields
+	// But Store.SaveUser uses REPLACE INTO, so we need all fields.
+	// Actually, Store.SaveUser takes a *models.User.
+	// Let's get the user first.
+	users, err := store.Get().GetUsers()
+	if err != nil {
+		sendJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "Failed to get users",
+		})
+		return
+	}
+
+	var targetUser *models.User
+	for _, u := range users {
+		if u.ID == req.UserID {
+			targetUser = u
+			break
+		}
+	}
+
+	if targetUser == nil {
+		sendJSON(w, http.StatusNotFound, map[string]string{
+			"error": "User not found",
+		})
+		return
+	}
+
+	targetUser.Avatar = req.Avatar
+	if err := store.Get().SaveUser(targetUser); err != nil {
+		sendJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "Failed to update user",
+		})
+		return
+	}
+
+	// Broadcast user update via WebSocket
+	// We can reuse the "users" list broadcast since it contains all info
+	GetHub().UpdateUserAvatar(req.UserID, req.Avatar)
+	GetHub().BroadcastUsers()
+
+	sendJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"avatar":  req.Avatar,
+	})
 }

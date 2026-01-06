@@ -30,6 +30,7 @@ class SecCrypto {
         const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
         const hashArray = Array.from(new Uint8Array(hashBuffer));
         const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        console.log('[CRYPTO] Generated hash:', hashHex, 'for password:', password);
         return hashHex;
     }
 
