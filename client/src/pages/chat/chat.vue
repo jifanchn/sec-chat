@@ -114,12 +114,12 @@
         </view>
         
         <view class="input-area">
-            <view class="input-toolbar">
-                <view class="tool-btn" @click="showEmojiPicker = true">😊</view>
-                <view class="tool-btn" @click="chooseImage">📷</view>
-            </view>
-            
             <view class="input-wrapper">
+                <view class="input-toolbar">
+                    <view class="tool-btn" @click="showEmojiPicker = true">😊</view>
+                    <view class="tool-btn" @click="chooseImage">📷</view>
+                </view>
+                
                 <view v-if="showMentionPicker" class="mention-picker">
                     <view v-for="member in filteredMembers" :key="member.id" class="mention-item" @click="selectMention(member)">
                         <view class="mention-avatar">
@@ -144,8 +144,8 @@
         
         <view v-if="contextMenu.visible" class="context-menu" :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }">
             <view class="menu-item" @click="handleContextAction('copy')">复制</view>
-            <view class="menu-item" @click="handleContextAction('reply')">回复</view>
-            <view v-if="isSameUser(contextMenu.message?.fromName, userName)" class="menu-item" @click="handleContextAction('recall')">撤回</view>
+            <view v-if="!contextMenu.message?.recalled" class="menu-item" @click="handleContextAction('reply')">回复</view>
+            <view v-if="isSameUser(contextMenu.message?.fromName, userName) && !contextMenu.message?.recalled" class="menu-item" @click="handleContextAction('recall')">撤回</view>
         </view>
         <view v-if="contextMenu.visible" class="context-overlay" @click="hideContextMenu"></view>
 
@@ -869,7 +869,9 @@ export default {
         cancelReply() { this.replyingTo = null; },
         getReplyPreview(id) {
             const msg = this.messages.find(m => m.id === id);
-            return msg ? (msg.decryptedContent || '').substring(0, 30) : '消息已删除';
+            if (!msg) return '消息已删除';
+            if (msg.recalled) return '消息已撤回';
+            return (msg.decryptedContent || '').substring(0, 30);
         },
         getAvatarChar(name) { return (name || '?').charAt(0).toUpperCase(); },
         isSameUser(fromName, currentName) {
@@ -1063,19 +1065,21 @@ export default {
 .icon-btn-svg:active { background: rgba(255,255,255,0.15); transform: scale(0.95); }
 .svg-icon { width: 40rpx; height: 40rpx; display: block; }
 .loading-more { text-align: center; padding: 20rpx; font-size: 24rpx; color: #888; }
-.messages-container { flex: 1; padding: 20rpx; overflow: auto; min-height: 0; }
+.messages-container { flex: 1; padding: 20rpx 20rpx 20rpx 20rpx; overflow: auto; min-height: 0; box-sizing: border-box; }
+.messages-container::-webkit-scrollbar { display: none; width: 0; height: 0; color: transparent; }
 .messages-list { display: flex; flex-direction: column; gap: 24rpx; }
 .time-divider { text-align: center; font-size: 24rpx; color: #888; margin: 20rpx 0; }
 .system-message { text-align: center; font-size: 24rpx; color: #888; background: rgba(0,0,0,0.05); padding: 12rpx 24rpx; border-radius: 24rpx; align-self: center; }
-.message { display: flex; gap: 16rpx; max-width: 80%; }
-.message.self { flex-direction: row-reverse; align-self: flex-end; }
+.message { display: flex; gap: 16rpx; max-width: 80%; margin-left: 0; margin-right: auto; }
+.message.self { flex-direction: row-reverse; align-self: flex-end; margin-left: auto; margin-right: 0; }
 .message-avatar { width: 80rpx; height: 80rpx; border-radius: 8rpx; background: linear-gradient(135deg, #667eea, #764ba2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; overflow: hidden; }
 .message-avatar text { color: #fff; font-size: 32rpx; font-weight: 600; }
 .avatar-image { width: 100%; height: 100%; }
-.message-content { display: flex; flex-direction: column; gap: 8rpx; }
+.message-content { display: flex; flex-direction: column; gap: 8rpx; align-items: flex-start; }
+.message.self .message-content { align-items: flex-end; }
 .message-header { display: flex; align-items: center; gap: 16rpx; font-size: 24rpx; color: #888; }
 .message.self .message-header { flex-direction: row-reverse; }
-.message-bubble { padding: 20rpx 28rpx; border-radius: 16rpx; background: #95ec69; font-size: 30rpx; color: #000; }
+.message-bubble { padding: 20rpx 28rpx; border-radius: 16rpx; background: #95ec69; font-size: 30rpx; color: #000; word-break: break-all; }
 .message:not(.self) .message-bubble { border-top-left-radius: 0; }
 .message.self .message-bubble { background: #95ec69; border-top-right-radius: 0; }
 .message-bubble.image { padding: 8rpx; background: transparent; }
@@ -1087,11 +1091,11 @@ export default {
 .reply-label { font-size: 26rpx; color: #07c160; }
 .close-btn { font-size: 40rpx; color: #888; padding: 0 16rpx; }
 .input-area { background: #2c2c2c; border-top: 1rpx solid #333; padding: 16rpx; padding-bottom: calc(16rpx + env(safe-area-inset-bottom)); flex-shrink: 0; }
-.input-toolbar { display: flex; gap: 16rpx; margin-bottom: 16rpx; }
-.tool-btn { font-size: 40rpx; padding: 8rpx; }
-.input-wrapper { display: flex; align-items: flex-end; gap: 16rpx; position: relative; }
-.message-input { flex: 1; padding: 20rpx 28rpx; border: 2rpx solid #444; border-radius: 40rpx; font-size: 30rpx; height: 120rpx; color: white; background: #3a3a3a; overflow-y: auto; resize: none; line-height: 1.5; }
-.send-btn { background: #ccc; color: #fff; padding: 20rpx 32rpx; border-radius: 40rpx; font-size: 28rpx; }
+.input-toolbar { display: flex; align-items: center; gap: 8rpx; flex-shrink: 0; }
+.tool-btn { font-size: 40rpx; padding: 8rpx; line-height: 1; }
+.input-wrapper { display: flex; align-items: center; gap: 12rpx; position: relative; flex-wrap: nowrap; }
+.message-input { flex: 1; min-width: 0; padding: 16rpx 24rpx; border: 2rpx solid #444; border-radius: 40rpx; font-size: 30rpx; height: 72rpx; color: white; background: #3a3a3a; overflow-y: auto; resize: none; line-height: 1.4; box-sizing: border-box; }
+.send-btn { background: #ccc; color: #fff; padding: 16rpx 28rpx; border-radius: 40rpx; font-size: 28rpx; flex-shrink: 0; white-space: nowrap; }
 .mention-picker {
     position: absolute;
     bottom: 110%;
