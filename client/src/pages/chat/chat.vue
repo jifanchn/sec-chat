@@ -1010,30 +1010,67 @@ export default {
         scrollToBottom(force = false) { 
             if (!this.messages.length) return;
             
+            const targetId = 'msg-' + this.messages[this.messages.length - 1].id;
+            
             const doScroll = () => {
-                // Use native DOM API for H5 - more reliable
+                // Method 1: Use native DOM API to find and scroll container
                 if (typeof document !== 'undefined') {
-                    const container = document.querySelector('.messages-container');
-                    if (container) {
-                        container.scrollTop = container.scrollHeight;
+                    // Try multiple selectors - uni-app may wrap elements differently
+                    const selectors = [
+                        '.messages-container',
+                        'uni-scroll-view',
+                        '.uni-scroll-view',
+                        '[scroll-y]'
+                    ];
+                    for (const selector of selectors) {
+                        const container = document.querySelector(selector);
+                        if (container && container.scrollHeight > 0) {
+                            container.scrollTop = container.scrollHeight;
+                            break;
+                        }
+                    }
+                    
+                    // Method 2: Try to scroll the target element into view directly
+                    const targetEl = document.getElementById(targetId);
+                    if (targetEl) {
+                        targetEl.scrollIntoView({ behavior: 'auto', block: 'end' });
                     }
                 }
-                // Also set uni-app reactive properties as fallback
+                
+                // Method 3: Use uni-app reactive properties
                 this.scrollTop = 999999;
-                this.scrollToId = 'msg-' + this.messages[this.messages.length - 1].id;
+                this.scrollToId = targetId;
                 this.isAtBottom = true;
             };
             
-            this.$nextTick(() => {
-                doScroll();
-                
-                // Additional scroll attempts for reliability after DOM fully renders
-                if (force) {
-                    setTimeout(doScroll, 50);
-                    setTimeout(doScroll, 150);
-                    setTimeout(doScroll, 300);
-                    setTimeout(doScroll, 500);
+            // Use requestAnimationFrame for smoother scrolling on mobile
+            const scrollWithRAF = () => {
+                if (typeof requestAnimationFrame !== 'undefined') {
+                    requestAnimationFrame(doScroll);
+                } else {
+                    doScroll();
                 }
+            };
+            
+            this.$nextTick(() => {
+                // First, reset scrollToId to force re-trigger
+                this.scrollToId = '';
+                
+                this.$nextTick(() => {
+                    scrollWithRAF();
+                    
+                    // Additional scroll attempts for reliability after DOM fully renders
+                    // Mobile browsers may need longer delays
+                    if (force) {
+                        setTimeout(scrollWithRAF, 50);
+                        setTimeout(scrollWithRAF, 150);
+                        setTimeout(scrollWithRAF, 300);
+                        setTimeout(scrollWithRAF, 500);
+                        setTimeout(scrollWithRAF, 800);
+                        setTimeout(scrollWithRAF, 1200);
+                        setTimeout(scrollWithRAF, 2000);
+                    }
+                });
             });
         },
         goToMembers() { uni.navigateTo({ url: '/pages/members/members' }); },
