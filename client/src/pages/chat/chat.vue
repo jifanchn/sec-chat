@@ -50,7 +50,7 @@
             <text>连接已断开，请检查网络</text>
         </view>
         
-        <scroll-view class="messages-container" scroll-y :scroll-into-view="scrollToId" @scrolltoupper="loadMore" @scroll="onScroll">
+        <scroll-view class="messages-container" scroll-y :scroll-top="scrollTop" :scroll-into-view="scrollToId" scroll-with-animation @scrolltoupper="loadMore" @scroll="onScroll">
             <view class="messages-list">
                 <view v-if="hasMore" class="loading-more">
                     <text>正在加载更多消息...</text>
@@ -400,7 +400,7 @@ export default {
             this.$nextTick(() => {
                 // Username match is our source of truth for "self"
                 if (this.isAtBottom || this.isSameUser(data.fromName, this.userName)) {
-                    this.scrollToBottom();
+                    this.scrollToBottom(true);
                 }
             });
             SecWebSocket.sendRead(data.id);
@@ -440,7 +440,7 @@ export default {
         },
         onSystemMessage(data) {
             this.messages.push({ ...data, decryptedContent: data.content });
-            this.$nextTick(() => this.scrollToBottom());
+            this.$nextTick(() => this.scrollToBottom(true));
         },
         onTyping(data) {
             // Treat same-name user as "self" for UI purposes
@@ -1008,13 +1008,33 @@ export default {
             return this.isSameUser(msg?.fromName, this.userName);
         },
         scrollToBottom(force = false) { 
-            if (this.messages.length) {
-                this.scrollToId = '';
-                this.$nextTick(() => {
-                    this.scrollToId = 'msg-' + this.messages[this.messages.length - 1].id;
-                    this.isAtBottom = true; 
-                });
-            }
+            if (!this.messages.length) return;
+            
+            const doScroll = () => {
+                // Use native DOM API for H5 - more reliable
+                if (typeof document !== 'undefined') {
+                    const container = document.querySelector('.messages-container');
+                    if (container) {
+                        container.scrollTop = container.scrollHeight;
+                    }
+                }
+                // Also set uni-app reactive properties as fallback
+                this.scrollTop = 999999;
+                this.scrollToId = 'msg-' + this.messages[this.messages.length - 1].id;
+                this.isAtBottom = true;
+            };
+            
+            this.$nextTick(() => {
+                doScroll();
+                
+                // Additional scroll attempts for reliability after DOM fully renders
+                if (force) {
+                    setTimeout(doScroll, 50);
+                    setTimeout(doScroll, 150);
+                    setTimeout(doScroll, 300);
+                    setTimeout(doScroll, 500);
+                }
+            });
         },
         goToMembers() { uni.navigateTo({ url: '/pages/members/members' }); },
         handleLogout() {
